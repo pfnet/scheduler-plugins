@@ -1,0 +1,263 @@
+package gang
+
+import (
+	"time"
+
+	. "github.com/onsi/ginkgo"
+	. "github.com/onsi/gomega"
+
+	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+
+	"github.pfidev.jp/scheduler-plugins/utils"
+)
+
+const gangAnnotationPrefix = "scheduling.k8s.pfn.io/gang"
+
+var _ = Describe("Gang.String", func() {
+	It("should work", func() {
+		gang := NewGang(GangNameAndSpec{
+			Name: GangName(types.NamespacedName{Namespace: "user-0", Name: "gang-0"}),
+		}, gangAnnotationPrefix)
+		Expect(gang.String()).To(Equal("user-0/gang-0: []"))
+
+		gang.AddOrUpdate(makePod("pod-0", "user-0/pod-0", v1.PodPending))
+		gang.AddOrUpdate(makePod("pod-1", "user-0/pod-1", v1.PodRunning))
+
+		Expect(gang.String()).To(
+			SatisfyAny(
+				Equal("user-0/gang-0: [pod-0(Pending), pod-1(Running)]"),
+				Equal("user-0/gang-0: [pod-1(Running), pod-0(Pending)]"),
+			),
+		)
+	})
+})
+
+var _ = Describe("Gang.AddOrUpdate, Delete, CountPod, CountPodIf", func() {
+	It("should work", func() {
+		gang := NewGang(GangNameAndSpec{
+			Name: GangName(types.NamespacedName{Namespace: "user-0", Name: "gang-0"}),
+		}, gangAnnotationPrefix)
+		// Empty gang
+		Expect(gang.CountPod()).To(Equal(0))
+
+		// Add a new Pod
+		pod := makePod("pod-0", "user-0/pod-0", v1.PodPending)
+		gang.AddOrUpdate(pod)
+		Expect(gang.CountPod()).To(Equal(1))
+		Expect(gang.CountPodIf(utils.IsAssignedPod)).To(Equal(0))
+
+		// Update the Pod
+		pod.Spec.NodeName = "node-0"
+		gang.AddOrUpdate(pod)
+		Expect(gang.CountPod()).To(Equal(1))
+		Expect(gang.CountPodIf(utils.IsAssignedPod)).To(Equal(1))
+
+		// Delete a Pod that is not in the gang
+		gang.Delete(makePod("pod-1", "user-0/pod-1", v1.PodPending))
+		Expect(gang.CountPod()).To(Equal(1))
+		Expect(gang.CountPodIf(utils.IsAssignedPod)).To(Equal(1))
+
+		// Delete the Pod in the gang
+		gang.Delete(pod)
+		Expect(gang.CountPod()).To(Equal(0))
+		Expect(gang.CountPodIf(utils.IsAssignedPod)).To(Equal(0))
+	})
+})
+
+var _ = Describe("Gang.SatisfiesInvariantForScheduling", func() {
+	It("should work", func() {
+		gang := NewGang(GangNameAndSpec{
+			Name: GangName(types.NamespacedName{Namespace: "user-0", Name: "gang-0"}),
+			Spec: GangSpec{Size: 2},
+		}, gangAnnotationPrefix)
+		timeoutConfig := ScheduleTimeoutConfig{
+			DefaultSeconds: 300,
+			LimitSeconds:   300,
+		}
+
+		// NotReady
+		satisfies, status := gang.SatisfiesInvariantForScheduling(timeoutConfig)
+		Expect(satisfies).To(BeFalse())
+		Expect(status).To(Equal(GangNotReady))
+
+		// SpecInvalid
+		pod0 := &v1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "pod-0",
+				UID:  types.UID("pod-0"),
+				Annotations: map[string]string{
+					GangNameAnnotationKey(gangAnnotationPrefix):                   "gang-0",
+					GangSizeAnnotationKey(gangAnnotationPrefix):                   "2",
+					GangScheduleTimeoutSecondsAnnotationKey(gangAnnotationPrefix): "100",
+				},
+			},
+			Status: v1.PodStatus{
+				Phase: v1.PodPending,
+			},
+		}
+
+		pod1 := &v1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "pod-1",
+				UID:  types.UID("pod-1"),
+				Annotations: map[string]string{
+					GangNameAnnotationKey(gangAnnotationPrefix): "gang-0",
+					GangSizeAnnotationKey(gangAnnotationPrefix): "2",
+				},
+			},
+			Status: v1.PodStatus{
+				Phase: v1.PodPending,
+			},
+		}
+
+		gang.AddOrUpdate(pod0)
+		gang.AddOrUpdate(pod1)
+
+		satisfies, status = gang.SatisfiesInvariantForScheduling(timeoutConfig)
+		Expect(satisfies).To(BeFalse())
+		Expect(status).To(Equal(GangSpecInvalid))
+
+		// Satisfies invariant
+		pod0.Annotations[GangScheduleTimeoutSecondsAnnotationKey(gangAnnotationPrefix)] = "300"
+		satisfies, _ = gang.SatisfiesInvariantForScheduling(timeoutConfig)
+		Expect(satisfies).To(BeTrue())
+
+		// FullyScheduled
+		pod2 := &v1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "pod-2",
+				UID:  types.UID("pod-2"),
+				Annotations: map[string]string{
+					GangNameAnnotationKey(gangAnnotationPrefix): "gang-0",
+					GangSizeAnnotationKey(gangAnnotationPrefix): "2",
+				},
+			},
+			Status: v1.PodStatus{
+				Phase: v1.PodPending,
+			},
+		}
+
+		pod0.Spec.NodeName = "node-0"
+		pod1.Spec.NodeName = "node-1"
+		pod2.Spec.NodeName = "node-2"
+
+		satisfies, status = gang.SatisfiesInvariantForScheduling(timeoutConfig)
+		Expect(satisfies).To(BeFalse())
+		Expect(status).To(Equal(GangFullyScheduled))
+
+		// WaitForTerminating
+		pod0.DeletionTimestamp = &metav1.Time{Time: time.Now()}
+		satisfies, status = gang.SatisfiesInvariantForScheduling(timeoutConfig)
+		Expect(satisfies).To(BeFalse())
+		Expect(status).To(Equal(GangWaitForTerminating))
+	})
+})
+
+var _ = Describe("Gang.IterateOverPods", func() {
+	It("should work", func() {
+		gang := NewGang(GangNameAndSpec{
+			Name: GangName(types.NamespacedName{Namespace: "user-0", Name: "gang-0"}),
+		}, gangAnnotationPrefix)
+
+		// Empty gang
+		names := []string{}
+		gang.IterateOverPods(func(p *v1.Pod) {
+			names = append(names, p.Name)
+		})
+		Expect(names).To(BeEmpty())
+
+		// Non-mutating function
+		gang.AddOrUpdate(makePod("pod-0", "user-0/pod-0", v1.PodPending))
+		gang.AddOrUpdate(makePod("pod-1", "user-0/pod-1", v1.PodPending))
+
+		gang.IterateOverPods(func(p *v1.Pod) {
+			names = append(names, p.Name)
+		})
+		Expect(names).To(SatisfyAny(
+			Equal([]string{"pod-0", "pod-1"}),
+			Equal([]string{"pod-1", "pod-0"}),
+		))
+
+		// Mutating function
+		gang.IterateOverPods(func(p *v1.Pod) {
+			p.Name = p.Name + "-mutated"
+		})
+
+		names = []string{}
+		gang.IterateOverPods(func(p *v1.Pod) {
+			names = append(names, p.Name)
+		})
+		Expect(names).To(SatisfyAny(
+			Equal([]string{"pod-0-mutated", "pod-1-mutated"}),
+			Equal([]string{"pod-1-mutated", "pod-0-mutated"}),
+		))
+	})
+})
+
+var _ = Describe("Gang.IsAllNonCompletedSpecIdenticalTo", func() {
+	It("should work", func() {
+		gang := NewGang(GangNameAndSpec{
+			Name: GangName(types.NamespacedName{Namespace: "user-0", Name: "gang-0"}),
+		}, gangAnnotationPrefix)
+
+		spec := GangSpec{
+			Size:                 2,
+			TimeoutBase:          300 * time.Second,
+			TimeoutJitterSeconds: 100,
+		}
+		timeoutConfig := ScheduleTimeoutConfig{
+			DefaultSeconds: 300,
+			LimitSeconds:   300,
+			JitterSeconds:  100,
+		}
+
+		// Empty gang
+		Expect(gang.IsAllNonCompletedSpecIdenticalTo(spec, timeoutConfig)).To(BeTrue())
+
+		// One Pod
+		pod0 := &v1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "pod-0",
+				UID:  types.UID("pod-0"),
+				Annotations: map[string]string{
+					GangNameAnnotationKey(gangAnnotationPrefix):                   "gang-0",
+					GangSizeAnnotationKey(gangAnnotationPrefix):                   "2",
+					GangScheduleTimeoutSecondsAnnotationKey(gangAnnotationPrefix): "100",
+				},
+			},
+			Status: v1.PodStatus{
+				Phase: v1.PodPending,
+			},
+		}
+
+		gang.AddOrUpdate(pod0)
+		Expect(gang.IsAllNonCompletedSpecIdenticalTo(spec, timeoutConfig)).To(BeFalse())
+
+		pod0.Annotations[GangScheduleTimeoutSecondsAnnotationKey(gangAnnotationPrefix)] = "300"
+		Expect(gang.IsAllNonCompletedSpecIdenticalTo(spec, timeoutConfig)).To(BeTrue())
+
+		// Two Pod
+		pod1 := &v1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "pod-1",
+				UID:  types.UID("pod-1"),
+				Annotations: map[string]string{
+					GangNameAnnotationKey(gangAnnotationPrefix):                   "gang-0",
+					GangSizeAnnotationKey(gangAnnotationPrefix):                   "2",
+					GangScheduleTimeoutSecondsAnnotationKey(gangAnnotationPrefix): "100",
+				},
+			},
+			Status: v1.PodStatus{
+				Phase: v1.PodPending,
+			},
+		}
+
+		gang.AddOrUpdate(pod1)
+		Expect(gang.IsAllNonCompletedSpecIdenticalTo(spec, timeoutConfig)).To(BeFalse())
+
+		pod1.Annotations[GangScheduleTimeoutSecondsAnnotationKey(gangAnnotationPrefix)] = "300"
+		Expect(gang.IsAllNonCompletedSpecIdenticalTo(spec, timeoutConfig)).To(BeTrue())
+	})
+})
