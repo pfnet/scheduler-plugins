@@ -9,7 +9,7 @@ import (
 	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
 
-	"github.pfidev.jp/scheduler-plugins/utils"
+	"github.com/pfnet/scheduler-plugins/utils"
 )
 
 type SchedulingGang interface {

@@ -1,4 +1,4 @@
-module github.pfidev.jp/scheduler-plugins
+module github.com/pfnet/scheduler-plugins
 
 go 1.20
 

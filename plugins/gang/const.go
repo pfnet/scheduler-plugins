@@ -1,6 +1,6 @@
 package gang
 
-import "github.pfidev.jp/scheduler-plugins/plugins/names"
+import "github.com/pfnet/scheduler-plugins/plugins/names"
 
 const (
 	// PluginName is the name of the plugin.

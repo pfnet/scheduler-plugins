@@ -10,7 +10,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
-	"github.pfidev.jp/scheduler-plugins/utils"
+	"github.com/pfnet/scheduler-plugins/utils"
 )
 
 const gangAnnotationPrefix = "scheduling.k8s.pfn.io/gang"
