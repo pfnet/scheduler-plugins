@@ -14,7 +14,7 @@ import (
 	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/cmd/kube-scheduler/app"
 
-	gang "github.pfidev.jp/scheduler-plugins/plugins/gang"
+	gang "github.com/pfnet/scheduler-plugins/plugins/gang"
 )
 
 var (

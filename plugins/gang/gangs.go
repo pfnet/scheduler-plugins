@@ -20,7 +20,7 @@ import (
 	"k8s.io/kubernetes/pkg/scheduler/framework"
 	"k8s.io/kubernetes/pkg/scheduler/util"
 
-	"github.pfidev.jp/scheduler-plugins/utils"
+	"github.com/pfnet/scheduler-plugins/utils"
 )
 
 // TODO: More distinguishable name

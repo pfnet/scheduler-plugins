@@ -13,7 +13,7 @@ import (
 	"k8s.io/kubernetes/pkg/scheduler/framework"
 	schedulermetrics "k8s.io/kubernetes/pkg/scheduler/metrics"
 
-	"github.pfidev.jp/scheduler-plugins/utils"
+	"github.com/pfnet/scheduler-plugins/utils"
 )
 
 var (

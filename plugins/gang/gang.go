@@ -11,7 +11,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 
-	"github.pfidev.jp/scheduler-plugins/utils"
+	"github.com/pfnet/scheduler-plugins/utils"
 )
 
 type Gang interface {
