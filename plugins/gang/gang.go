@@ -6,12 +6,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pfnet/scheduler-plugins/utils"
 	"k8s.io/apimachinery/pkg/util/sets"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
-
-	"github.com/pfnet/scheduler-plugins/utils"
 )
 
 type Gang interface {
@@ -20,30 +19,8 @@ type Gang interface {
 	// NameAndSpec returns the GangNameAndSpec of this Gang.
 	NameAndSpec() *GangNameAndSpec
 
-	// AddOrUpdate adds a given Pod to this Gang, or updates a Pod in this Gang.
-	AddOrUpdate(*corev1.Pod)
-	// Delete deletes a given Pod from this Gang. If the Pod is not in this Gang, Delete is a no-op.
-	Delete(*corev1.Pod)
-
-	// Pods returns all Pods in the gang.
-	Pods() []*corev1.Pod
 	// CountPod returns the number of Pods in this Gang.
 	CountPod() int
-	// CountPodIf returns the number of Pods that meets a given predicate in this Gang.
-	CountPodIf(predicate func(*corev1.Pod) bool) int
-
-	// SatisfiesInvariantForgScheduling checks that this Gang satisfy an invariant for gang
-	// scheduling. If this Gang does not sastisfy the invariant, this plugin does not start
-	// scheduling of this Gang and rejects it immediately.
-	SatisfiesInvariantForScheduling(ScheduleTimeoutConfig) (bool, GangSchedulingEvent)
-
-	// IterateOverPods iterates over the Pods in this Gang while applying a given function.
-	// The function can mutate the Pods.
-	IterateOverPods(func(pod *corev1.Pod))
-
-	// IsAllNonCompleletedSpecIdenticalTo checks that the gang specs of all non-completed Pods in
-	// this Gang are identical to a given gang spec.
-	IsAllNonCompletedSpecIdenticalTo(GangSpec, ScheduleTimeoutConfig) bool
 
 	// Mark this Gang as "being deleted now".
 	SetDeleting(deleting bool)
@@ -58,6 +35,45 @@ type Gang interface {
 	PutPosition(pod *corev1.Pod, position PodPosition)
 	ReadyToGetSchedule() bool
 	UnreadyToSchedulePodNames() []string
+	LastActiviaionTime() time.Time
+
+	// Below functions aren't thread-safe.
+
+	// A caller needs to manage a RLockying a given function.
+
+	// IterateOverPods isn't thread-safe. A caller needs to manage a RLock.
+	// The function can mutate the Pods.
+	IterateOverPods(func(pod *corev1.Pod))
+
+	// IsAllNonCompleletedSpecIdenticalTo checks that the gang specs of all non-completed Pods in
+	// IsAllNonCompletedSpecIdenticalTo isn't thread-safe. A caller needs to manage a RLock.
+	// this Gang are identical to a given gang spec.
+	IsAllNonCompletedSpecIdenticalTo(GangSpec, ScheduleTimeoutConfig) bool
+
+	// CountPodIf returns the number of Pods that meets a given predicate in this Gang.
+	// CountPodIf isn't thread-safe. A caller needs to manage a RLock.
+	CountPodIf(predicate func(*corev1.Pod) bool) int
+
+	// Pods returns all Pods in the gang.
+	// Pods isn't thread-safe. A caller needs to manage a RLock.
+	Pods() []*corev1.Pod
+
+	// SatisfiesInvariantForgScheduling checks that this Gang satisfy an invariant for gang
+	// SatisfiesInvariantForScheduling isn't thread-safe. A caller needs to manage a RLock.
+	// scheduling. If this Gang does not sastisfy the invariant, this plugin does not start
+	// scheduling of this Gang and rejects it immediately.
+	SatisfiesInvariantForScheduling(ScheduleTimeoutConfig) (bool, GangSchedulingEvent)
+
+	// A caller needs to manage a RWLock
+
+	// IterateOverPods iterates over the Pods in this Gang while appl
+	// AddOrUpdate adds a given Pod to this Gang, or updates a Pod in this Gang.
+	// AddOrUpdate isn't thread-safe. A caller needs to manage a RWLock.
+	AddOrUpdate(*corev1.Pod)
+
+	// Delete deletes a given Pod from this Gang. If the Pod is not in this Gang, Delete is a no-op.
+	// Delete isn't thread-safe. A caller needs to manage a RWLock.
+	Delete(*corev1.Pod)
 }
 
 // NewGang creates a new Gang.
@@ -72,6 +88,7 @@ func NewGang(nameSpec GangNameAndSpec, gangAnnotationPrefix string) Gang {
 		deleting:              false,
 		positions:             map[types.UID]PodPosition{},
 		unreadyToSchedulePods: sets.New[string](),
+		lastActivationTime:    time.Now(),
 	}
 }
 
@@ -109,6 +126,8 @@ const (
 	//
 	// The gang Permit is responsible to change a position to PodPositionWaitingOnPermit when the Pod go through Permit plugin with Wait status.
 	PodPositionWaitingOnPermit
+	// PodPositionCompleted represents that a Pod is scheduled.
+	PodPositionCompleted
 )
 
 func (p PodPosition) String() string {
@@ -125,6 +144,8 @@ func (p PodPosition) String() string {
 		return "SchedulingCycle"
 	case PodPositionWaitingOnPermit:
 		return "WaitingOnPermit"
+	case PodPositionCompleted:
+		return "Completed"
 	default:
 		return "nil"
 	}
@@ -135,9 +156,9 @@ type gangImpl struct {
 
 	gangAnnotationPrefix string
 
-	// podsLock protects accesses to `pods` maps.
-	podsLock sync.RWMutex
-	pods     map[types.UID]*corev1.Pod
+	// pods isn't protected by any lock on purpose and consequently, functions of gangImpl aren't thread-safe.
+	// The caller is supposed to take a lock whenever necessary.
+	pods map[types.UID]*corev1.Pod
 
 	deleting bool
 
@@ -147,6 +168,8 @@ type gangImpl struct {
 	positions map[types.UID]PodPosition
 	// unreadyToSchedulePods aren't ready to get schedule.
 	unreadyToSchedulePods sets.Set[string]
+
+	lastActivationTime time.Time
 }
 
 // GetPosition gets PodPosition from store and returns it.
@@ -186,19 +209,24 @@ func (g *gangImpl) PutPosition(pod *corev1.Pod, position PodPosition) {
 	if position == PodPositionUnknown || position == PodPositionUnschedulablePodPool {
 		g.unreadyToSchedulePods.Insert(getNamespacedName(pod))
 	} else {
+		if position == PodPositionActiveQ {
+			g.lastActivationTime = time.Now()
+		}
 		g.unreadyToSchedulePods.Delete(getNamespacedName(pod))
 	}
 }
 
 // String implements fmt.Stringer interface.
+// String isn't thread-safe. A caller needs to manage a RLock.
 // Returns a human-readable string representation of the gang.
 func (g *gangImpl) String() string {
-	g.podsLock.RLock()
-	defer g.podsLock.RUnlock()
+	g.positionsLock.RLock()
+	defer g.positionsLock.RUnlock()
 
 	pods := make([]string, 0, len(g.pods))
 	for _, p := range g.pods {
-		pods = append(pods, fmt.Sprintf("%s(%s)", p.Name, p.Status.Phase))
+		position := g.positions[p.UID]
+		pods = append(pods, fmt.Sprintf("%s(%s, %s)", p.Name, p.Status.Phase, position.String()))
 	}
 	return g.Name.String() + ": [" + strings.Join(pods, ", ") + "]"
 }
@@ -208,16 +236,10 @@ func (g *gangImpl) NameAndSpec() *GangNameAndSpec {
 }
 
 func (g *gangImpl) AddOrUpdate(pod *corev1.Pod) {
-	g.podsLock.Lock()
-	defer g.podsLock.Unlock()
-
 	g.pods[pod.UID] = pod
 }
 
 func (g *gangImpl) Delete(pod *corev1.Pod) {
-	g.podsLock.Lock()
-	defer g.podsLock.Unlock()
-
 	delete(g.pods, pod.UID)
 }
 
@@ -227,9 +249,6 @@ func (g *gangImpl) CountPod() int {
 
 // Pods returns all Pods in the gang.
 func (g *gangImpl) Pods() []*corev1.Pod {
-	g.podsLock.RLock()
-	defer g.podsLock.RUnlock()
-
 	pods := make([]*corev1.Pod, 0, len(g.pods))
 	for _, p := range g.pods {
 		pods = append(pods, p.DeepCopy())
@@ -238,9 +257,6 @@ func (g *gangImpl) Pods() []*corev1.Pod {
 }
 
 func (g *gangImpl) CountPodIf(pred func(pod *corev1.Pod) bool) int {
-	g.podsLock.RLock()
-	defer g.podsLock.RUnlock()
-
 	c := 0
 	for _, pod := range g.pods {
 		if pred(pod) {
@@ -273,9 +289,6 @@ func (g *gangImpl) SatisfiesInvariantForScheduling(
 }
 
 func (g *gangImpl) IterateOverPods(f func(pod *corev1.Pod)) {
-	g.podsLock.RLock()
-	defer g.podsLock.RUnlock()
-
 	for _, pod := range g.pods {
 		f(pod)
 	}
@@ -284,9 +297,6 @@ func (g *gangImpl) IterateOverPods(f func(pod *corev1.Pod)) {
 func (g *gangImpl) IsAllNonCompletedSpecIdenticalTo(
 	target GangSpec, timeoutConfig ScheduleTimeoutConfig,
 ) bool {
-	g.podsLock.RLock()
-	defer g.podsLock.RUnlock()
-
 	for _, pod := range g.pods {
 		if utils.IsNonCompletedPod(pod) {
 			s := gangSpecOf(pod, timeoutConfig, g.gangAnnotationPrefix)
@@ -325,10 +335,8 @@ func (g *gangImpl) EventMessageForPodFunc(event GangSchedulingEvent) func(*corev
 	}
 }
 
+// isAllNonCompletedSpecIdentical isn't thread-safe. A caller needs to manage a RLock.
 func (g *gangImpl) isAllNonCompletedSpecIdentical(timeoutConfig ScheduleTimeoutConfig) bool {
-	g.podsLock.RLock()
-	defer g.podsLock.RUnlock()
-
 	var spec *GangSpec
 	for _, pod := range g.pods {
 		if utils.IsNonCompletedPod(pod) {
@@ -341,4 +349,8 @@ func (g *gangImpl) isAllNonCompletedSpecIdentical(timeoutConfig ScheduleTimeoutC
 		}
 	}
 	return true
+}
+
+func (g *gangImpl) LastActiviaionTime() time.Time {
+	return g.lastActivationTime
 }

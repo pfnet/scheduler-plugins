@@ -3,29 +3,22 @@ package gang
 import (
 	"fmt"
 
-	corev1 "k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	fwkruntime "k8s.io/kubernetes/pkg/scheduler/framework/runtime"
 )
 
 type PluginConfig struct {
 	// GangAnnotationPrefix is the prefix of all gang annotations.
-	// This configuration is required; if not set, the plugin will return an error during its initialization.
+	// This configuration is required and if not set, the plugin will return an error during its initialization.
 	GangAnnotationPrefix string `json:"gangAnnotationPrefix"`
-	// SchedulerName is the name of the scheduler.
-	// This field is optional; if not set, the default scheduler name will be used.
-	SchedulerName string `json:"schedulerName,omitempty"`
-	// GangScheduleTimeoutSecondsLimit is the maximum timeout in seconds for gang scheduling.
-	// If the timeout configured in the pod annotation exceeds this limit, the timeout will be set to this limit.
-	// This field is optional; if not set, 100 will be used as a default value.
-	GangScheduleTimeoutSecondsLimit int `json:"gangScheduleTimeoutSecondLimit,omitempty"`
-	// GangScheduleDefaultTimeoutSeconds is the default timeout in seconds,
-	// which will be used if the timeout is not set in the pod annotation.
-	// This field is optional; if not set, 30 will be used as a default value.
-	GangScheduleDefaultTimeoutSeconds int `json:"gangScheduleDefaultTimeoutSecond,omitempty"`
-	// GangScheduleTimeoutJitterSeconds is the jitter in seconds for timeout.
-	// This field is optional; if not set, 30 will be used as a default value.
-	GangScheduleTimeoutJitterSeconds int `json:"gangScheduleTimeoutJitterSecond,omitempty"`
+
+	SchedulerName                     string `json:"schedulerName,omitempty"`
+	GangScheduleTimeoutSecondsLimit   int    `json:"gangScheduleTimeoutSecondLimit,omitempty"`
+	GangScheduleDefaultTimeoutSeconds int    `json:"gangScheduleDefaultTimeoutSecond,omitempty"`
+	GangScheduleTimeoutJitterSeconds  int    `json:"gangScheduleTimeoutJitterSecond,omitempty"`
+
+	HealthCheckAddr string `json:"healthCheckAddr,omitempty"`
 }
 
 type ScheduleTimeoutConfig struct {
@@ -58,10 +51,6 @@ func (config *PluginConfig) TimeoutConfig() ScheduleTimeoutConfig {
 }
 
 func (config *PluginConfig) fillEmptyFields() {
-	if config.SchedulerName == "" {
-		config.SchedulerName = corev1.DefaultSchedulerName
-	}
-
 	if config.GangScheduleTimeoutSecondsLimit <= 0 {
 		config.GangScheduleTimeoutSecondsLimit = GangScheduleTimeoutSecondsLimitDefault
 	}
@@ -70,5 +59,8 @@ func (config *PluginConfig) fillEmptyFields() {
 	}
 	if config.GangScheduleTimeoutJitterSeconds <= 0 {
 		config.GangScheduleTimeoutJitterSeconds = GangScheduleTimeoutJitterSecondsDefault
+	}
+	if config.SchedulerName == "" {
+		config.SchedulerName = v1.DefaultSchedulerName
 	}
 }

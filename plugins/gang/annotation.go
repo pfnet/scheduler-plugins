@@ -18,3 +18,9 @@ func GangSizeAnnotationKey(prefix string) string {
 func GangScheduleTimeoutSecondsAnnotationKey(prefix string) string {
 	return prefix + "-schedule-timeout-seconds"
 }
+
+// GangSchedulePositionAnnotationKey is the annotation key to hint the position of the pod in the gang.
+// Note: This annotation is read only for tests or debugging. Do not set this annotation manually.
+func GangSchedulePositionAnnotationKey(prefix string) string {
+	return prefix + "-position"
+}

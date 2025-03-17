@@ -5,11 +5,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pfnet/scheduler-plugins/utils"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
-
-	"github.com/pfnet/scheduler-plugins/utils"
 )
 
 type SchedulingGang interface {
@@ -214,8 +213,7 @@ func (g *schedulingGangImpl) rejectAllAndDoneIfInvalid(pod *corev1.Pod, timeoutC
 	}
 
 	gangToCheck, _ := GangNameAndSpecOf(pod, timeoutConfig, gangAnnotationPrefix)
-	if nameSpec.Spec != gangToCheck.Spec ||
-		!g.IsAllNonCompletedSpecIdenticalTo(gangToCheck.Spec, timeoutConfig) {
+	if nameSpec.Spec != gangToCheck.Spec || !g.IsAllNonCompletedSpecIdenticalTo(gangToCheck.Spec, timeoutConfig) {
 		return g.rejectAllAndDone(pod, GangSpecInvalid, g.EventMessageForPodFunc(GangSpecInvalid))
 	}
 

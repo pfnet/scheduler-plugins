@@ -5,12 +5,11 @@ import (
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
+	"github.com/pfnet/scheduler-plugins/utils"
 
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-
-	"github.com/pfnet/scheduler-plugins/utils"
 )
 
 const gangAnnotationPrefix = "scheduling.k8s.pfn.io/gang"
@@ -22,13 +21,13 @@ var _ = Describe("Gang.String", func() {
 		}, gangAnnotationPrefix)
 		Expect(gang.String()).To(Equal("user-0/gang-0: []"))
 
-		gang.AddOrUpdate(makePod("pod-0", "user-0/pod-0", v1.PodPending))
-		gang.AddOrUpdate(makePod("pod-1", "user-0/pod-1", v1.PodRunning))
+		gang.AddOrUpdate(makePod("user-0", "pod-0", v1.PodPending, nil))
+		gang.AddOrUpdate(makePod("user-0", "pod-1", v1.PodRunning, nil))
 
 		Expect(gang.String()).To(
 			SatisfyAny(
-				Equal("user-0/gang-0: [pod-0(Pending), pod-1(Running)]"),
-				Equal("user-0/gang-0: [pod-1(Running), pod-0(Pending)]"),
+				Equal("user-0/gang-0: [pod-0(Pending, Unknown), pod-1(Running, Unknown)]"),
+				Equal("user-0/gang-0: [pod-1(Running, Unknown), pod-0(Pending, Unknown)]"),
 			),
 		)
 	})
@@ -43,7 +42,7 @@ var _ = Describe("Gang.AddOrUpdate, Delete, CountPod, CountPodIf", func() {
 		Expect(gang.CountPod()).To(Equal(0))
 
 		// Add a new Pod
-		pod := makePod("pod-0", "user-0/pod-0", v1.PodPending)
+		pod := makePod("user-0", "pod-0", v1.PodPending, nil)
 		gang.AddOrUpdate(pod)
 		Expect(gang.CountPod()).To(Equal(1))
 		Expect(gang.CountPodIf(utils.IsAssignedPod)).To(Equal(0))
@@ -55,7 +54,7 @@ var _ = Describe("Gang.AddOrUpdate, Delete, CountPod, CountPodIf", func() {
 		Expect(gang.CountPodIf(utils.IsAssignedPod)).To(Equal(1))
 
 		// Delete a Pod that is not in the gang
-		gang.Delete(makePod("pod-1", "user-0/pod-1", v1.PodPending))
+		gang.Delete(makePod("user-0", "pod-1", v1.PodPending, nil))
 		Expect(gang.CountPod()).To(Equal(1))
 		Expect(gang.CountPodIf(utils.IsAssignedPod)).To(Equal(1))
 
@@ -169,8 +168,8 @@ var _ = Describe("Gang.IterateOverPods", func() {
 		Expect(names).To(BeEmpty())
 
 		// Non-mutating function
-		gang.AddOrUpdate(makePod("pod-0", "user-0/pod-0", v1.PodPending))
-		gang.AddOrUpdate(makePod("pod-1", "user-0/pod-1", v1.PodPending))
+		gang.AddOrUpdate(makePod("user-0", "pod-0", v1.PodPending, nil))
+		gang.AddOrUpdate(makePod("user-0", "pod-1", v1.PodPending, nil))
 
 		gang.IterateOverPods(func(p *v1.Pod) {
 			names = append(names, p.Name)
