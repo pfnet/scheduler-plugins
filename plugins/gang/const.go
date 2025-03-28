@@ -2,10 +2,10 @@ package gang
 
 import "github.com/pfnet/scheduler-plugins/plugins/names"
 
-const (
-	// PluginName is the name of the plugin.
-	PluginName = names.Gang
+// PluginName is the name of the plugin.
+var PluginName = names.Gang
 
+const (
 	// GangScheduleTimeoutSecondsDefault is the default value for gang schedule timeout
 	GangScheduleTimeoutSecondsDefault = 30
 
