@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pfnet/scheduler-plugins/utils"
 	"github.com/sasha-s/go-deadlock"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -19,9 +20,9 @@ import (
 	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
 	"k8s.io/kubernetes/pkg/scheduler/util"
-
-	"github.com/pfnet/scheduler-plugins/utils"
 )
+
+const updatePositionAnnotationWorkerNum = 10
 
 // TODO: More distinguishable name
 type Gangs struct {
@@ -45,21 +46,32 @@ type Gangs struct {
 	// It's just a workaround and we can remove this if #110175 is resolved.
 	podUIDs     sets.Set[types.UID]
 	podUIDsLock deadlock.Mutex
+
+	positionAnnotationUpdateWorkerPool []chan positionAnnotationUpdateTask
 }
 
 func NewGangs(fwkHandle framework.Handle, client kubernetes.Interface, timeoutConfig ScheduleTimeoutConfig, gangAnnotationPrefix string) *Gangs {
 	deadlock.Opts.DeadlockTimeout = 3 * time.Minute
 	deadlock.Opts.DisableLockOrderDetection = true
 
-	return &Gangs{
-		gangAnnotationPrefix: gangAnnotationPrefix,
-		fwkHandle:            fwkHandle,
-		client:               client,
-		timeoutConfig:        timeoutConfig,
-		gangs:                map[GangName]Gang{},
-		activateGangsPool:    sets.New[GangName](),
-		podUIDs:              sets.New[types.UID](),
+	gangs := &Gangs{
+		gangAnnotationPrefix:               gangAnnotationPrefix,
+		fwkHandle:                          fwkHandle,
+		client:                             client,
+		timeoutConfig:                      timeoutConfig,
+		gangs:                              map[GangName]Gang{},
+		activateGangsPool:                  sets.New[GangName](),
+		podUIDs:                            sets.New[types.UID](),
+		positionAnnotationUpdateWorkerPool: make([]chan positionAnnotationUpdateTask, updatePositionAnnotationWorkerNum),
 	}
+
+	// Start position annotation update workers.
+	for i := 0; i < updatePositionAnnotationWorkerNum; i++ {
+		gangs.positionAnnotationUpdateWorkerPool[i] = make(chan positionAnnotationUpdateTask)
+		go gangs.updatePositionAnnotation(gangs.positionAnnotationUpdateWorkerPool[i])
+	}
+
+	return gangs
 }
 
 // Note on parallelism:
@@ -89,7 +101,13 @@ func (gangs *Gangs) PreEnqueue(pod *corev1.Pod) *framework.Status {
 	}
 
 	gangs.mapLock.Lock()
-	defer gangs.mapLock.Unlock()
+	gangMapUnlocked := false
+	defer func() {
+		if !gangMapUnlocked {
+			gangs.mapLock.Unlock()
+		}
+	}()
+
 	gang, ok := gangs.gangs[nameSpec.Name]
 	if !ok {
 		// Gang has not been registered in AddOrUpdate().
@@ -113,7 +131,7 @@ func (gangs *Gangs) PreEnqueue(pod *corev1.Pod) *framework.Status {
 		// - PodPositionSchedulingCycle: this Pod is through preemption and may get schedulable in the next scheduling cycle.
 
 		// Check scheduling invariant before enqueueing.
-		if ok, status := gang.SatisfiesInvariantForScheduling(gangs.timeoutConfig); !ok {
+		if ok, gangEvent := gang.SatisfiesInvariantForScheduling(gangs.timeoutConfig); !ok {
 			// This gang is invalid for some reasons (e.g., the num of pods is less than the required number of Pods),
 			// so reject this Pod here.
 			// This Pod will reach PreEnqueue again when, for example, another Pod is added to the gang.
@@ -121,28 +139,53 @@ func (gangs *Gangs) PreEnqueue(pod *corev1.Pod) *framework.Status {
 			// Note that we don't need to handle other gang Pods here;
 			// they'll reach PreEnqueue soon, and the position will be updated to PodPositionReadyToSchedule below.
 
-			msg := gang.EventMessage(status, pod)
+			msg := gang.EventMessage(gangEvent, pod)
 			klog.V(3).Info(msg)
 			status, _ := reject(msg)
+			for _, p := range gang.Pods() {
+				p := p
+				gangs.fwkHandle.EventRecorder().Eventf(p, nil, corev1.EventTypeNormal, string(gangEvent), "Scheduling", msg)
+			}
 
 			gangs.putPosition(gang, pod, PodPositionUnschedulablePodPool)
+
+			// Pods rejected here can be schedulable when an event for some Pods in the same gang happens.
+			// And, _ideally_, it's supposed to be handled by Pod events in EventsToRegister,
+			// but Pod event doesn't work expectedly for non-scheduled Pod event.
+			// see: https://github.com/kubernetes/kubernetes/issues/110175
+			// So, we, here, register those Pods and handle them in handlePodAdd as a workaround.
+			gangs.podUIDsLock.Lock()
+			defer gangs.podUIDsLock.Unlock()
+			gangs.podUIDs.Insert(pod.UID)
 
 			return status
 		}
 
 		// This gang is ready to be enqueued.
 
-		klog.V(3).Infof("position update: %v/%s -> %s", pod.Name, position, PodPositionActiveQ)
+		klog.V(3).Infof("position update in PreEnqueue: %v/%s -> %s", pod.Name, position, PodPositionActiveQ)
 		gangs.putPosition(gang, pod, PodPositionActiveQ)
 
 		return nil
 	}
 
 	// This pod is tried to be enqueueed, so mark it as ReadyToSchedule.
-	klog.V(3).Infof("position update: %v/%s -> %s", pod.Name, position, PodPositionReadyToSchedule)
+	klog.V(3).Infof("position update in PreEnqueue: %v/%s -> %s", pod.Name, position, PodPositionReadyToSchedule)
 	gangs.putPosition(gang, pod, PodPositionReadyToSchedule)
 	// The position change may make the gang ready to schedulable.
 	if gang.ReadyToGetSchedule() {
+		if time.Since(gang.LastActiviaionTime()) > 10*time.Minute {
+			// We need to unlock gangs.mapLock before acquiring gangs.activateGangsPoolLock
+			// to prevent deadlock.
+			gangs.mapLock.Unlock()
+			gangMapUnlocked = true
+
+			gangs.activateGangsPoolLock.Lock()
+			if !gangs.activateGangsPool.Has(gang.NameAndSpec().Name) {
+				klog.Fatalf("gang %s may be in the infinite loop (Gang=%s) ", gang.NameAndSpec().Name, gangs.String())
+			}
+			gangs.activateGangsPoolLock.Unlock()
+		}
 		gangs.fwkHandle.EventRecorder().Eventf(pod, nil, corev1.EventTypeNormal, "WaitActivation", "Scheduling", "all Pods in the gang are now ready to schedule. Waiting for activation.")
 		return framework.NewStatus(framework.Unschedulable, "This Pod will be soon activated along with other gang Pods")
 	}
@@ -181,13 +224,16 @@ func (gangs *Gangs) PostFilter(ctx context.Context, pod *corev1.Pod) {
 		klog.ErrorS(nil, "PostFilter: unknown position registered for the incoming Pod", "pod", klog.KObj(pod))
 	}
 
-	klog.V(3).Infof("position update: %v/%s -> %s", pod.Name, position, PodPositionUnschedulablePodPool)
+	klog.V(3).Infof("position update in PostFilter: %v/%s -> %s", pod.Name, position, PodPositionUnschedulablePodPool)
 	gangs.putPosition(gang, pod, PodPositionUnschedulablePodPool)
 	gangs.cleanup(ctx, gang)
 }
 
 // cleanup reject all waiting Pods and un-nominate a Node.
 func (gangs *Gangs) cleanup(ctx context.Context, gang Gang) {
+	gangs.mapLock.RLock()
+	defer gangs.mapLock.RUnlock()
+
 	schedulingGang, isScheduling := gang.(SchedulingGang)
 	if isScheduling {
 		// all waiting pods in the same gang should be rejected.
@@ -198,7 +244,7 @@ func (gangs *Gangs) cleanup(ctx context.Context, gang Gang) {
 		position := gang.GetPosition(pod.UID)
 		if position == PodPositionWaitingOnPermit {
 			// As we rejected all waiting Pods, we should change those Pods' position to PodPositionReadyToSchedule.
-			klog.V(3).Infof("position update: %v/%s -> %s", pod.Name, position, PodPositionReadyToSchedule)
+			klog.V(3).Infof("position update in cleanup: %v/%s -> %s", pod.Name, position, PodPositionReadyToSchedule)
 			gangs.putPosition(gang, pod, PodPositionReadyToSchedule)
 		}
 
@@ -207,7 +253,7 @@ func (gangs *Gangs) cleanup(ctx context.Context, gang Gang) {
 		if pod.Status.NominatedNodeName != "" {
 			// This Pod should be ReadyToSchedule
 			// because the scheduler has already done the preemption for that Pod and thus the cluster should have the capacity for this Pod. (at least right after the preemption.)
-			klog.V(3).Infof("position update: %v/%s -> %s", pod.Name, position, PodPositionReadyToSchedule)
+			klog.V(3).Infof("position update in cleanup: %v/%s -> %s", pod.Name, position, PodPositionReadyToSchedule)
 			gangs.putPosition(gang, pod, PodPositionReadyToSchedule)
 
 			podStatusCopy := pod.Status.DeepCopy()
@@ -216,12 +262,15 @@ func (gangs *Gangs) cleanup(ctx context.Context, gang Gang) {
 				klog.ErrorS(err, "failed to remove NominatedNodeName on gang Pod", "pod", klog.KObj(pod))
 				return
 			}
-			pinfo, err := framework.NewPodInfo(pod)
-			if err != nil {
-				klog.ErrorS(err, "failed to create PodInfo for gang Pod", "pod", klog.KObj(pod))
-				return
-			}
-			gangs.fwkHandle.AddNominatedPod(klog.FromContext(ctx), pinfo, &framework.NominatingInfo{NominatingMode: framework.ModeOverride, NominatedNodeName: ""})
+
+			// TODO(utam0k): Uncomment this after investigating the reason why it will cause a deadlock.
+			//
+			// pinfo, err := framework.NewPodInfo(pod)
+			// if err != nil {
+			// 	klog.ErrorS(err, "failed to create PodInfo for gang Pod", "pod", klog.KObj(pod))
+			// 	return
+			// }
+			// gangs.fwkHandle.AddNominatedPod(klog.FromContext(ctx), pinfo, &framework.NominatingInfo{NominatingMode: framework.ModeOverride, NominatedNodeName: ""})
 		}
 	})
 }
@@ -253,7 +302,7 @@ func (gangs *Gangs) PreFilter(ctx context.Context, state *framework.CycleState, 
 			// https://github.com/kubernetes/kubernetes/issues/118226
 			//
 			// Since it rarely happens, put ReadyToSchedule on this Pod so that this bug won't block entire gang scheduling.
-			klog.V(3).Infof("position update: %v/%s -> %s", pod.Name, position, PodPositionReadyToSchedule)
+			klog.V(3).Infof("position update in PreFilter: %v/%s -> %s", pod.Name, position, PodPositionReadyToSchedule)
 			gangs.putPosition(gang, pod, PodPositionReadyToSchedule)
 			// In this path, we don't do gangs.cleanup because we can just retry to schedule this Pod with the appropriate position.
 			return framework.NewStatus(framework.Unschedulable, "This pod isn't ready to schedule")
@@ -263,7 +312,7 @@ func (gangs *Gangs) PreFilter(ctx context.Context, state *framework.CycleState, 
 		// PreFilter rejects all other gang Pods.
 		gangs.cleanup(ctx, gang)
 		// This Pod is still ReadyToSchedule.
-		klog.V(3).Infof("position update: %v/%s -> %s", pod.Name, position, PodPositionReadyToSchedule)
+		klog.V(3).Infof("position update in PreFilter: %v/%s -> %s", pod.Name, position, PodPositionReadyToSchedule)
 		gangs.putPosition(gang, pod, PodPositionReadyToSchedule)
 
 		msg := gang.EventMessage(GangNotReadyToSchedule, pod)
@@ -271,16 +320,8 @@ func (gangs *Gangs) PreFilter(ctx context.Context, state *framework.CycleState, 
 		return status
 	}
 
-	klog.V(3).Infof("position update: %v/%s", pod.Name, PodPositionSchedulingCycle)
+	klog.V(3).Infof("position update in PreFilter: %v/%s", pod.Name, PodPositionSchedulingCycle)
 	gangs.putPosition(gang, pod, PodPositionSchedulingCycle)
-	defer func() {
-		if !status.IsSuccess() {
-			// Pods rejected below can be schedulable when an event for some Pods in the same gang happens.
-			gangs.podUIDsLock.Lock()
-			defer gangs.podUIDsLock.Unlock()
-			gangs.podUIDs.Insert(pod.UID)
-		}
-	}()
 
 	// Reset scheduling gang to non-scheduling gang if it is done
 	schedulingGang, isScheduling := gang.(SchedulingGang)
@@ -324,6 +365,13 @@ func (gangs *Gangs) putPosition(gang Gang, pod *corev1.Pod, position PodPosition
 
 	readyToGetSchedule := gang.ReadyToGetSchedule()
 
+	// Push the position update task to the worker pool.
+	go func() {
+		task := positionAnnotationUpdateTask{pod: pod, position: position}
+		workerIndex := hashPodUID(pod.UID) % uint32(len(gangs.positionAnnotationUpdateWorkerPool))
+		gangs.positionAnnotationUpdateWorkerPool[workerIndex] <- task
+	}()
+
 	// The position change makes the gang ready to schedulable.
 	if readyToGetSchedule && !wasReadyToGetSchedule {
 		gangs.activateGangsPoolLock.Lock()
@@ -339,24 +387,33 @@ func (gangs *Gangs) putPosition(gang Gang, pod *corev1.Pod, position PodPosition
 // It uses PodsToActivate feature that the scheduling framework provides,
 // which moves all Pods that we register in the cycle state from the unschedulable Pod pool to the activeQ.
 func (gangs *Gangs) activatePods(state *framework.CycleState) {
-	gangs.activateGangsPoolLock.Lock()
-	defer gangs.activateGangsPoolLock.Unlock()
-
 	// In addition to activateGangsPoolLock, we must lock gangs.mapLock during entire this process
 	// because if a new Pod is registered in gang during this process,
 	// we might miss to activate some gang Pods.
-	gangs.mapLock.Lock()
-	defer gangs.mapLock.Unlock()
+	gangs.mapLock.RLock()
+	defer gangs.mapLock.RUnlock()
+
+	gangs.activateGangsPoolLock.Lock()
+	defer gangs.activateGangsPoolLock.Unlock()
 
 	// Get all Pods from all gangs in activateGangsPool.
 	podsToActivate := []*corev1.Pod{}
 	for _, gangName := range gangs.activateGangsPool.UnsortedList() {
-		gang := gangs.gangs[gangName]
+		gang, ok := gangs.gangs[gangName]
+		if !ok {
+			klog.Warning("A gang is not found in gangs.gangs despite it's in activateGangsPool", "gang", gangName)
+			continue
+		}
+
 		for _, p := range gang.Pods() {
 			gang.PutPosition(p, PodPositionActiveQ)
 			gangs.fwkHandle.EventRecorder().Eventf(p, nil, corev1.EventTypeNormal, "Activated", "Scheduling", "Pod is activated and the scheduler will soon try to schedule them.")
 			podsToActivate = append(podsToActivate, p)
 		}
+	}
+
+	if len(podsToActivate) == 0 {
+		return
 	}
 
 	c, err := state.Read(framework.PodsToActivateKey)
@@ -422,8 +479,13 @@ func (gangs *Gangs) Permit(state *framework.CycleState, pod *corev1.Pod) (retSta
 
 	status, t := schedulingGang.Permit(state, pod, gangs.timeoutConfig)
 	if status.IsWait() {
-		klog.V(3).Infof("position update: %v/%s", pod.Name, PodPositionWaitingOnPermit)
+		klog.V(3).Infof("position update: %v/%s in Permit", pod.Name, PodPositionWaitingOnPermit)
 		gangs.putPosition(gang, pod, PodPositionWaitingOnPermit)
+	} else if status.IsSuccess() {
+		gang.IterateOverPods(func(pod *corev1.Pod) {
+			klog.V(3).Infof("position update to %v/%s in Permit", pod.Name, PodPositionCompleted)
+			gangs.putPosition(gang, pod, PodPositionCompleted)
+		})
 	}
 
 	return status, t
@@ -463,7 +525,7 @@ func (gangs *Gangs) Unreserve(pod *corev1.Pod, recorder events.EventRecorder) {
 	recorder.Eventf(pod, nil, corev1.EventTypeWarning, string(GangSchedulingTimedOut), "Scheduling", msg)
 	klog.V(3).Info(msg)
 
-	klog.V(3).Infof("position update: %v/%s -> %s", pod.Name, position, PodPositionReadyToSchedule)
+	klog.V(3).Infof("position update: %v/%s -> %s in Unreserve", pod.Name, position, PodPositionReadyToSchedule)
 	gangs.putPosition(gang, pod, PodPositionReadyToSchedule)
 	schedulingGang.Timeout()
 }
@@ -491,7 +553,7 @@ func (gangs *Gangs) AddOrUpdate(pod *corev1.Pod, recorder events.EventRecorder) 
 		defer gangs.podUIDsLock.Unlock()
 		for _, p := range gang.Pods() {
 			if gangs.podUIDs.Has(p.UID) {
-				klog.V(3).Infof("position update: %v/%s", pod.Name, PodPositionReadyToSchedule)
+				klog.V(3).Infof("position update: %v/%s in AddOrUpdate", pod.Name, PodPositionReadyToSchedule)
 				gangs.putPosition(gang, p, PodPositionReadyToSchedule)
 				gangs.podUIDs.Delete(p.UID)
 			}

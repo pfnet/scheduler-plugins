@@ -13,6 +13,7 @@ import (
 	"k8s.io/client-go/tools/events"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
 	"k8s.io/kubernetes/pkg/scheduler/framework/parallelize"
+	"k8s.io/kubernetes/pkg/scheduler/util/assumecache"
 )
 
 // Implements framework.Handle
@@ -30,6 +31,10 @@ var _ framework.Handle = &MockFrameworkHandle{}
 var _ framework.WaitingPod = &MockWaitingPod{}
 
 func (f *MockFrameworkHandle) SnapshotSharedLister() framework.SharedLister {
+	return nil
+}
+
+func (f *MockFrameworkHandle) ResourceClaimCache() *assumecache.AssumeCache {
 	return nil
 }
 
@@ -60,10 +65,10 @@ func (f *MockFrameworkHandle) UpdateNominatedPod(logger logr.Logger, oldPod *v1.
 func (f *MockFrameworkHandle) NominatedPodsForNode(nodeName string) []*framework.PodInfo { return nil }
 
 // framework.PluginsRunner
-func (f *MockFrameworkHandle) RunPreScorePlugins(context.Context, *framework.CycleState, *v1.Pod, []*v1.Node) *framework.Status {
+func (f *MockFrameworkHandle) RunPreScorePlugins(context.Context, *framework.CycleState, *v1.Pod, []*framework.NodeInfo) *framework.Status {
 	return nil
 }
-func (f *MockFrameworkHandle) RunScorePlugins(context.Context, *framework.CycleState, *v1.Pod, []*v1.Node) ([]framework.NodePluginScores, *framework.Status) {
+func (f *MockFrameworkHandle) RunScorePlugins(context.Context, *framework.CycleState, *v1.Pod, []*framework.NodeInfo) ([]framework.NodePluginScores, *framework.Status) {
 	return nil, nil
 }
 func (f *MockFrameworkHandle) RunFilterPlugins(context.Context, *framework.CycleState, *v1.Pod, *framework.NodeInfo) *framework.Status {

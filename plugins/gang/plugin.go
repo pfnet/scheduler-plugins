@@ -3,8 +3,11 @@ package gang
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"reflect"
 	"time"
 
+	"github.com/pfnet/scheduler-plugins/utils"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -12,8 +15,6 @@ import (
 	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
 	schedulermetrics "k8s.io/kubernetes/pkg/scheduler/metrics"
-
-	"github.com/pfnet/scheduler-plugins/utils"
 )
 
 var (
@@ -33,7 +34,7 @@ type Plugin struct {
 	gangs *Gangs // Gangs has own lock
 }
 
-func NewPlugin(configuration runtime.Object, fwkHandle framework.Handle) (framework.Plugin, error) {
+func NewPlugin(_ context.Context, configuration runtime.Object, fwkHandle framework.Handle) (framework.Plugin, error) {
 	registerMetrics.Do(func() {
 		schedulermetrics.RegisterMetrics(gangSchedulingEventCounter)
 	})
@@ -45,10 +46,11 @@ func NewPlugin(configuration runtime.Object, fwkHandle framework.Handle) (framew
 	}
 	klog.Infof("%s: PluginConfig=%+v", PluginName, config)
 
+	gangs := NewGangs(fwkHandle, fwkHandle.ClientSet(), config.TimeoutConfig(), config.GangAnnotationPrefix)
 	plugin := &Plugin{
 		config:    *config,
 		fwkHandle: fwkHandle,
-		gangs:     NewGangs(fwkHandle, fwkHandle.ClientSet(), config.TimeoutConfig(), config.GangAnnotationPrefix),
+		gangs:     gangs,
 	}
 
 	// Cache gang Pods in plugin.gangs
@@ -62,6 +64,17 @@ func NewPlugin(configuration runtime.Object, fwkHandle framework.Handle) (framew
 		},
 	}); err != nil {
 		return nil, fmt.Errorf("add EventHandler on podInformer: %w", err)
+	}
+
+	if config.HealthCheckAddr != "" {
+		go func() {
+			healthCheck := newGangHealthServer(gangs)
+
+			http.Handle("/gang-healthz", healthCheck)
+			if err := http.ListenAndServe(config.HealthCheckAddr, nil); err != nil {
+				klog.Fatalf("failed to start health check server: %v", err)
+			}
+		}()
 	}
 
 	return plugin, nil
@@ -103,7 +116,7 @@ func (p *Plugin) PreFilter(
 
 func (p *Plugin) PreFilterExtensions() framework.PreFilterExtensions { return nil }
 
-func (p *Plugin) EventsToRegister() []framework.ClusterEventWithHint {
+func (p *Plugin) EventsToRegister(ctx context.Context) ([]framework.ClusterEventWithHint, error) {
 	return []framework.ClusterEventWithHint{
 		{
 			Event: framework.ClusterEvent{
@@ -113,14 +126,14 @@ func (p *Plugin) EventsToRegister() []framework.ClusterEventWithHint {
 		},
 		{
 			Event: framework.ClusterEvent{
-				// Note: framework.Pod isn't work anymore for non-scheduled Pod event.
+				// Note: framework.Pod doesn't work expectedly for non-scheduled Pod event.
 				// We're doing the workaround in handlePodAdd.
 				// see: https://github.com/kubernetes/kubernetes/issues/110175
 				Resource:   framework.Pod,
 				ActionType: framework.All,
 			},
 		},
-	}
+	}, nil
 }
 
 func (p *Plugin) Permit(
@@ -207,10 +220,17 @@ func (p *Plugin) handlePodAdd(obj interface{}) {
 }
 
 func (p *Plugin) handlePodUpdate(oldObj, newObj interface{}) {
-	pod := newObj.(*corev1.Pod)
-	gangName, _ := GangNameOf(pod, p.config.GangAnnotationPrefix)
-	klog.V(5).Infof("%s: handlePodUpdate: pod=%s/%s gang=%s", p.Name(), pod.Namespace, pod.Name, gangName)
-	p.gangs.AddOrUpdate(pod, p.fwkHandle.EventRecorder())
+	newPod, oldPod := newObj.(*corev1.Pod), oldObj.(*corev1.Pod)
+
+	// TOOD(utam0k): Introduce QHint to make it wiser.
+	// If pod.status or pod.spec isn't updated, there is no point in scheduling.
+	if reflect.DeepEqual(oldPod.Status, newPod.Status) && reflect.DeepEqual(oldPod.Spec, newPod.Spec) && reflect.DeepEqual(oldPod.DeletionTimestamp, newPod.DeletionTimestamp) {
+		return
+	}
+
+	gangName, _ := GangNameOf(newPod, p.config.GangAnnotationPrefix)
+	klog.V(5).Infof("%s: handlePodUpdate: pod=%s/%s gang=%s", p.Name(), newPod.Namespace, newPod.Name, gangName)
+	p.gangs.AddOrUpdate(newPod, p.fwkHandle.EventRecorder())
 }
 
 func (p *Plugin) handlePodDelete(obj interface{}) {
