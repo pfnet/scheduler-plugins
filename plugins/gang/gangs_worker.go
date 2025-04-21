@@ -17,20 +17,25 @@ type positionAnnotationUpdateTask struct {
 	position PodPosition
 }
 
-func (gangs *Gangs) updatePositionAnnotation(ch <-chan positionAnnotationUpdateTask) {
-	for task := range ch {
-		pod, position := task.pod, task.position
-		currentPosision, ok := pod.Annotations[GangSchedulePositionAnnotationKey(gangs.gangAnnotationPrefix)]
-		if !ok || currentPosision != position.String() {
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+func (gangs *Gangs) updatePositionAnnotation(ctx context.Context, ch <-chan positionAnnotationUpdateTask) {
+	for {
+		select {
+		case task := <-ch:
+			pod, position := task.pod, task.position
+			currentPosition, ok := pod.Annotations[GangSchedulePositionAnnotationKey(gangs.gangAnnotationPrefix)]
+			if !ok || currentPosition != position.String() {
+				ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 
-			applyConfig := corev1apply.Pod(pod.Name, pod.Namespace).WithAnnotations(map[string]string{
-				GangSchedulePositionAnnotationKey(gangs.gangAnnotationPrefix): position.String(),
-			})
-			if _, err := gangs.client.CoreV1().Pods(pod.Namespace).Apply(ctx, applyConfig, metav1.ApplyOptions{FieldManager: "scheduler-gangs"}); err != nil {
-				klog.Warningf("failed to apply %v to Pod(%s) : %v", applyConfig, klog.KObj(pod), err)
+				applyConfig := corev1apply.Pod(pod.Name, pod.Namespace).WithAnnotations(map[string]string{
+					GangSchedulePositionAnnotationKey(gangs.gangAnnotationPrefix): position.String(),
+				})
+				if _, err := gangs.client.CoreV1().Pods(pod.Namespace).Apply(ctx, applyConfig, metav1.ApplyOptions{FieldManager: "scheduler-gangs"}); err != nil {
+					klog.Warningf("failed to apply %v to Pod(%s) : %v", applyConfig, klog.KObj(pod), err)
+				}
+				cancel()
 			}
-			cancel()
+		case <-ctx.Done():
+			return
 		}
 	}
 }

@@ -50,7 +50,7 @@ type Gangs struct {
 	positionAnnotationUpdateWorkerPool []chan positionAnnotationUpdateTask
 }
 
-func NewGangs(fwkHandle framework.Handle, client kubernetes.Interface, timeoutConfig ScheduleTimeoutConfig, gangAnnotationPrefix string) *Gangs {
+func NewGangs(ctx context.Context, fwkHandle framework.Handle, client kubernetes.Interface, timeoutConfig ScheduleTimeoutConfig, gangAnnotationPrefix string) *Gangs {
 	deadlock.Opts.DeadlockTimeout = 3 * time.Minute
 	deadlock.Opts.DisableLockOrderDetection = true
 
@@ -68,7 +68,7 @@ func NewGangs(fwkHandle framework.Handle, client kubernetes.Interface, timeoutCo
 	// Start position annotation update workers.
 	for i := 0; i < updatePositionAnnotationWorkerNum; i++ {
 		gangs.positionAnnotationUpdateWorkerPool[i] = make(chan positionAnnotationUpdateTask)
-		go gangs.updatePositionAnnotation(gangs.positionAnnotationUpdateWorkerPool[i])
+		go gangs.updatePositionAnnotation(ctx, gangs.positionAnnotationUpdateWorkerPool[i])
 	}
 
 	return gangs

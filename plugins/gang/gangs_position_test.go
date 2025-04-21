@@ -251,7 +251,7 @@ var _ = Describe("PostFilter", func() {
 	It("when any Pod in the same gang has NominatedNodeName, NominatedNodeName will be removed", func() {
 		fwh := &mocks.MockFrameworkHandle{}
 		client := fwh.ClientSet()
-		gangs := NewGangs(fwh, client, ScheduleTimeoutConfig{}, gangAnnotationPrefix)
+		gangs := NewGangs(context.Background(), fwh, client, ScheduleTimeoutConfig{}, gangAnnotationPrefix)
 
 		existingPod := makePod("user-0", "pod-1", v1.PodPending, client)
 		existingPod.Annotations = map[string]string{
@@ -509,6 +509,6 @@ var _ = Describe("PositionAnnotation", func() {
 
 func NewGangsForTest(fwh framework.Handle, timeoutConfig ScheduleTimeoutConfig) (*Gangs, *fake.Clientset) {
 	fakeClient := fake.NewSimpleClientset()
-	gangs := NewGangs(fwh, fakeClient, timeoutConfig, gangAnnotationPrefix)
+	gangs := NewGangs(context.Background(), fwh, fakeClient, timeoutConfig, gangAnnotationPrefix)
 	return gangs, fakeClient
 }

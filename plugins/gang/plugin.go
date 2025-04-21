@@ -34,7 +34,7 @@ type Plugin struct {
 	gangs *Gangs // Gangs has own lock
 }
 
-func NewPlugin(_ context.Context, configuration runtime.Object, fwkHandle framework.Handle) (framework.Plugin, error) {
+func NewPlugin(ctx context.Context, configuration runtime.Object, fwkHandle framework.Handle) (framework.Plugin, error) {
 	registerMetrics.Do(func() {
 		schedulermetrics.RegisterMetrics(gangSchedulingEventCounter)
 	})
@@ -46,7 +46,7 @@ func NewPlugin(_ context.Context, configuration runtime.Object, fwkHandle framew
 	}
 	klog.Infof("%s: PluginConfig=%+v", PluginName, config)
 
-	gangs := NewGangs(fwkHandle, fwkHandle.ClientSet(), config.TimeoutConfig(), config.GangAnnotationPrefix)
+	gangs := NewGangs(ctx, fwkHandle, fwkHandle.ClientSet(), config.TimeoutConfig(), config.GangAnnotationPrefix)
 	plugin := &Plugin{
 		config:    *config,
 		fwkHandle: fwkHandle,
