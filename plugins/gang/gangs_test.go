@@ -15,7 +15,7 @@ import (
 
 var _ = Describe("Gangs.String", func() {
 	It("should format gangs into a correct string", func() {
-		gangs := NewGangs(nil, nil, ScheduleTimeoutConfig{}, gangAnnotationPrefix)
+		gangs := NewGangs(context.Background(), nil, nil, ScheduleTimeoutConfig{}, gangAnnotationPrefix)
 		Expect(gangs.String()).To(Equal("{}"))
 
 		gn := GangName(types.NamespacedName{Namespace: "user-0", Name: "gang-0"})
