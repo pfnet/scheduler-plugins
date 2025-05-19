@@ -1,8 +1,8 @@
 module github.com/pfnet/scheduler-plugins
 
-go 1.22.9
+go 1.23.0
 
-toolchain go1.23.4
+toolchain go1.23.9
 
 replace (
 	github.com/everpeace/kube-throttler => github.com/pfnet/kube-throttler v1.7.1
