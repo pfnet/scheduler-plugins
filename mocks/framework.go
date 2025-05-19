@@ -11,6 +11,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	restclient "k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/events"
+	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
 	"k8s.io/kubernetes/pkg/scheduler/framework/parallelize"
 	"k8s.io/kubernetes/pkg/scheduler/util/assumecache"
@@ -81,6 +82,9 @@ func (f *MockFrameworkHandle) RunPreFilterExtensionRemovePod(ctx context.Context
 	return nil
 }
 
+// framework.PodActivator
+func (f *MockFrameworkHandle) Activate(logger klog.Logger, pods map[string]*v1.Pod) {}
+
 // framework.Handle
 func (f *MockFrameworkHandle) KubeConfig() *restclient.Config { return nil }
 func (f *MockFrameworkHandle) ClientSet() clientset.Interface {
@@ -91,6 +95,7 @@ func (f *MockFrameworkHandle) ClientSet() clientset.Interface {
 }
 func (f *MockFrameworkHandle) EventRecorder() events.EventRecorder                    { return &events.FakeRecorder{} }
 func (f *MockFrameworkHandle) SharedInformerFactory() informers.SharedInformerFactory { return nil }
+func (f *MockFrameworkHandle) SharedDRAManager() framework.SharedDRAManager           { return nil }
 func (f *MockFrameworkHandle) RunFilterPluginsWithNominatedPods(ctx context.Context, state *framework.CycleState, pod *v1.Pod, info *framework.NodeInfo) *framework.Status {
 	return nil
 }
