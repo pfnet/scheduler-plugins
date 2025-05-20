@@ -21,7 +21,7 @@ lint:
 		docker run --rm \
 			-v "./:/go/src/github.com/preferred-ext/scheduler-plugins" \
 			-w /go/src/github.com/preferred-ext/scheduler-plugins\
-			golangci/golangci-lint:v1.55.2 golangci-lint run -v; \
+			golangci/golangci-lint:v1.64.8 golangci-lint run -v; \
 	else \
 		golangci-lint run -v; \
 	fi
