@@ -351,6 +351,8 @@ func (gangs *Gangs) PreFilter(ctx context.Context, state *framework.CycleState, 
 		state.Write(StateKeyGangFirstPod, gangFirstPod{})
 	}
 
+	gangs.mapLock.RLock()
+	defer gangs.mapLock.RUnlock()
 	return schedulingGang.PreFilter(pod, gangs.timeoutConfig)
 }
 
