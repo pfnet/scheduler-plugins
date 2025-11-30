@@ -1,6 +1,8 @@
 package gang
 
 import (
+	"fmt"
+	"strconv"
 	"time"
 
 	. "github.com/onsi/ginkgo"
@@ -151,6 +153,78 @@ var _ = Describe("Gang.SatisfiesInvariantForScheduling", func() {
 		satisfies, status = gang.SatisfiesInvariantForScheduling(timeoutConfig)
 		Expect(satisfies).To(BeFalse())
 		Expect(status).To(Equal(GangWaitForTerminating))
+	})
+	It("returns GangNotReady when completed pods don't count toward gang size", func() {
+		gang := NewGang(GangNameAndSpec{
+			Name: GangName(types.NamespacedName{Namespace: "user-0", Name: "gang-0"}),
+			Spec: GangSpec{Size: 2},
+		}, gangAnnotationPrefix)
+		timeoutConfig := ScheduleTimeoutConfig{
+			DefaultSeconds: 300,
+			LimitSeconds:   300,
+		}
+
+		// NotReady
+		satisfies, status := gang.SatisfiesInvariantForScheduling(timeoutConfig)
+		Expect(satisfies).To(BeFalse())
+		Expect(status).To(Equal(GangNotReady))
+
+		podSucceeded := &v1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "pod-succeeded",
+				UID:  types.UID("pod-succeeded"),
+				Annotations: map[string]string{
+					GangNameAnnotationKey(gangAnnotationPrefix):                   "gang-0",
+					GangSizeAnnotationKey(gangAnnotationPrefix):                   "2",
+					GangScheduleTimeoutSecondsAnnotationKey(gangAnnotationPrefix): "100",
+				},
+			},
+			Status: v1.PodStatus{
+				Phase: v1.PodSucceeded,
+			},
+		}
+
+		podFailed := &v1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "pod-failed",
+				UID:  types.UID("pod-failed"),
+				Annotations: map[string]string{
+					GangNameAnnotationKey(gangAnnotationPrefix): "gang-0",
+					GangSizeAnnotationKey(gangAnnotationPrefix): "2",
+				},
+			},
+			Status: v1.PodStatus{
+				Phase: v1.PodFailed,
+			},
+		}
+
+		gang.AddOrUpdate(podSucceeded)
+		gang.AddOrUpdate(podFailed)
+
+		satisfies, status = gang.SatisfiesInvariantForScheduling(timeoutConfig)
+		Expect(satisfies).To(BeFalse())
+		Expect(status).To(Equal(GangNotReady))
+
+		// FullyScheduled
+		gangSize := 2
+		for i := 0; i < gangSize; i++ {
+			podName := fmt.Sprintf("pod-%d", i)
+			gang.AddOrUpdate(&v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: podName,
+					UID:  types.UID(podName),
+					Annotations: map[string]string{
+						GangNameAnnotationKey(gangAnnotationPrefix): "gang-0",
+						GangSizeAnnotationKey(gangAnnotationPrefix): strconv.Itoa(gangSize),
+					},
+				},
+				Status: v1.PodStatus{
+					Phase: v1.PodPending,
+				},
+			})
+		}
+		satisfies, _ = gang.SatisfiesInvariantForScheduling(timeoutConfig)
+		Expect(satisfies).To(BeTrue())
 	})
 })
 
