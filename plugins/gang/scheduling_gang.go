@@ -8,14 +8,15 @@ import (
 	"github.com/pfnet/scheduler-plugins/utils"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/klog/v2"
+	fwk "k8s.io/kube-scheduler/framework"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
 )
 
 type SchedulingGang interface {
 	Gang
 
-	PreFilter(pod *corev1.Pod, timeoutConfig ScheduleTimeoutConfig) *framework.Status
-	Permit(state *framework.CycleState, pod *corev1.Pod, timeoutConfig ScheduleTimeoutConfig) (*framework.Status, time.Duration)
+	PreFilter(pod *corev1.Pod, timeoutConfig ScheduleTimeoutConfig) *fwk.Status
+	Permit(state fwk.CycleState, pod *corev1.Pod, timeoutConfig ScheduleTimeoutConfig) (*fwk.Status, time.Duration)
 
 	// Refresh rejects all waiting Pods and marks this SchedulingGang as done if it no longer
 	// satisfies the invariant for gang scheduling.
@@ -61,7 +62,7 @@ type schedulingGangImpl struct {
 	done             chan struct{}
 }
 
-func (g *schedulingGangImpl) PreFilter(pod *corev1.Pod, timeoutConfig ScheduleTimeoutConfig) *framework.Status {
+func (g *schedulingGangImpl) PreFilter(pod *corev1.Pod, timeoutConfig ScheduleTimeoutConfig) *fwk.Status {
 	gangNameToFilter, _ := GangNameOf(pod, g.gangAnnotationPrefix)
 	// isGang is checked in Plugin.PreFilter
 
@@ -88,10 +89,10 @@ func (g *schedulingGangImpl) PreFilter(pod *corev1.Pod, timeoutConfig ScheduleTi
 		return status
 	}
 
-	return framework.NewStatus(framework.Success, "")
+	return fwk.NewStatus(fwk.Success, "")
 }
 
-func (g *schedulingGangImpl) Permit(state *framework.CycleState, pod *corev1.Pod, timeoutConfig ScheduleTimeoutConfig) (*framework.Status, time.Duration) {
+func (g *schedulingGangImpl) Permit(state fwk.CycleState, pod *corev1.Pod, timeoutConfig ScheduleTimeoutConfig) (*fwk.Status, time.Duration) {
 	gangNameToPermit, _ := GangNameOf(pod, g.gangAnnotationPrefix)
 	// isGang is checked in Plugin.Permit
 
@@ -190,7 +191,7 @@ func (g *schedulingGangImpl) EventMessageForPodFunc(event GangSchedulingEvent) f
 // Methods below are non thread-safe
 // g.Lock() is required.
 
-func (g *schedulingGangImpl) rejectIfDone(pod *corev1.Pod) (*framework.Status, time.Duration) {
+func (g *schedulingGangImpl) rejectIfDone(pod *corev1.Pod) (*fwk.Status, time.Duration) {
 	if g.IsDone() {
 		logFunc := klog.Errorf
 		if g.completionStatus == GangSchedulingTimedOut {
@@ -205,7 +206,7 @@ func (g *schedulingGangImpl) rejectIfDone(pod *corev1.Pod) (*framework.Status, t
 	return nil, 0
 }
 
-func (g *schedulingGangImpl) rejectAllAndDoneIfInvalid(pod *corev1.Pod, timeoutConfig ScheduleTimeoutConfig, gangAnnotationPrefix string) (*framework.Status, time.Duration) {
+func (g *schedulingGangImpl) rejectAllAndDoneIfInvalid(pod *corev1.Pod, timeoutConfig ScheduleTimeoutConfig, gangAnnotationPrefix string) (*fwk.Status, time.Duration) {
 	nameSpec := g.NameAndSpec()
 
 	if ok, status := g.SatisfiesInvariantForScheduling(timeoutConfig); !ok {
@@ -220,7 +221,7 @@ func (g *schedulingGangImpl) rejectAllAndDoneIfInvalid(pod *corev1.Pod, timeoutC
 	return nil, 0
 }
 
-func (g *schedulingGangImpl) rejectAllAndDoneIfFullyScheduled(pod *corev1.Pod) (*framework.Status, time.Duration) {
+func (g *schedulingGangImpl) rejectAllAndDoneIfFullyScheduled(pod *corev1.Pod) (*fwk.Status, time.Duration) {
 	nameSpec := g.NameAndSpec()
 
 	numScheduled := g.CountPodIf(utils.IsAssignedAndNonCompletedPod)
@@ -233,7 +234,7 @@ func (g *schedulingGangImpl) rejectAllAndDoneIfFullyScheduled(pod *corev1.Pod) (
 
 func (g *schedulingGangImpl) allowAllAndDoneIfFillingRunningGang(
 	pod *corev1.Pod,
-) (*framework.Status, time.Duration) {
+) (*fwk.Status, time.Duration) {
 	nameSpec := g.NameAndSpec()
 
 	numScheduled := g.CountPodIf(utils.IsAssignedAndNonCompletedPod)
@@ -246,7 +247,7 @@ func (g *schedulingGangImpl) allowAllAndDoneIfFillingRunningGang(
 
 func (g *schedulingGangImpl) allowAllAndDoneIfReady(
 	pod *corev1.Pod,
-) (*framework.Status, time.Duration) {
+) (*fwk.Status, time.Duration) {
 	nameSpec := g.NameAndSpec()
 
 	numWaiting := 0
@@ -263,7 +264,7 @@ func (g *schedulingGangImpl) allowAllAndDoneIfReady(
 	return reject("")
 }
 
-func (g *schedulingGangImpl) waitForReady(state *framework.CycleState, pod *corev1.Pod, timeout time.Duration) (*framework.Status, time.Duration) {
+func (g *schedulingGangImpl) waitForReady(state fwk.CycleState, pod *corev1.Pod, timeout time.Duration) (*fwk.Status, time.Duration) {
 	msg := g.EventMessage(GangWaitForReady, pod)
 	g.fwkHandle.EventRecorder().Eventf(pod, nil, corev1.EventTypeNormal, string(GangWaitForReady), "Scheduling", msg)
 	klog.V(3).Info(msg)
@@ -282,7 +283,7 @@ type msgForPodFunc func(opd *corev1.Pod) string
 
 func (g *schedulingGangImpl) rejectAllAndDone(
 	pod *corev1.Pod, completionStatus GangSchedulingEvent, msgF msgForPodFunc,
-) (*framework.Status, time.Duration) {
+) (*fwk.Status, time.Duration) {
 	g.setDone(completionStatus)
 	g.RejectWaitingPods(completionStatus, msgF)
 
@@ -293,7 +294,7 @@ func (g *schedulingGangImpl) rejectAllAndDone(
 
 func (g *schedulingGangImpl) allowAllAndDone(
 	pod *corev1.Pod, completionStatus GangSchedulingEvent, msgF msgForPodFunc,
-) (*framework.Status, time.Duration) {
+) (*fwk.Status, time.Duration) {
 	g.setDone(completionStatus)
 
 	// Allow waiting Pods

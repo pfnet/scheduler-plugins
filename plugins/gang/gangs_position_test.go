@@ -14,6 +14,7 @@ import (
 	k8swait "k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/tools/events"
+	fwk "k8s.io/kube-scheduler/framework"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
 )
 
@@ -32,7 +33,7 @@ var _ = Describe("PreEnqueue", func() {
 		gn := GangName(types.NamespacedName{Namespace: "user-0", Name: "gang-0"})
 		p := gangs.gangs[gn].GetPosition("user-0/pod-0")
 		Expect(p).To(Equal(PodPositionReadyToSchedule))
-		Expect(status.Code()).To(Equal(framework.Unschedulable))
+		Expect(status.Code()).To(Equal(fwk.Unschedulable))
 	})
 	It("The Pod position is PodPositionUnknown", func() {
 		gangs, fakeClient := NewGangsForTest(&mocks.MockFrameworkHandle{}, ScheduleTimeoutConfig{})
@@ -52,7 +53,7 @@ var _ = Describe("PreEnqueue", func() {
 
 		p := gangs.gangs[gn].GetPosition("user-0/pod-0")
 		Expect(p).To(Equal(PodPositionReadyToSchedule))
-		Expect(status.Code()).To(Equal(framework.Unschedulable))
+		Expect(status.Code()).To(Equal(fwk.Unschedulable))
 	})
 	It("The Pod position is PodPositionActiveQ and all gang Pods are created", func() {
 		gangs, fakeClient := NewGangsForTest(&mocks.MockFrameworkHandle{}, ScheduleTimeoutConfig{})
@@ -74,7 +75,7 @@ var _ = Describe("PreEnqueue", func() {
 		gangs.gangs[gn].PutPosition(pod2, PodPositionActiveQ)
 
 		status := gangs.PreEnqueue(pod1)
-		Expect(status.Code()).To(Equal(framework.Success))
+		Expect(status.Code()).To(Equal(fwk.Success))
 
 		p := gangs.gangs[gn].GetPosition(pod1.UID)
 		Expect(p).To(Equal(PodPositionActiveQ))
@@ -102,7 +103,7 @@ var _ = Describe("PreEnqueue", func() {
 
 		p := gangs.gangs[gn].GetPosition(pod1.UID)
 		Expect(p).To(Equal(PodPositionActiveQ))
-		Expect(status.Code()).To(Equal(framework.Success))
+		Expect(status.Code()).To(Equal(fwk.Success))
 	})
 	It("The Pod position is PodPositionSchedulingCycle but the number of Pods doesn't meet gang spec", func() {
 		gangs, fakeClient := NewGangsForTest(&mocks.MockFrameworkHandle{}, ScheduleTimeoutConfig{})
@@ -120,7 +121,7 @@ var _ = Describe("PreEnqueue", func() {
 
 		p := gangs.gangs[gn].GetPosition(pod1.UID)
 		Expect(p).To(Equal(PodPositionUnschedulablePodPool))
-		Expect(status.Code()).To(Equal(framework.UnschedulableAndUnresolvable))
+		Expect(status.Code()).To(Equal(fwk.UnschedulableAndUnresolvable))
 
 		// when PreEnqueue rejects a Pod due to GangSpecInvalid, the Pod is inserted to podUIDs
 		Expect(gangs.podUIDs.Has("user-0/pod-1")).To(Equal(true))
@@ -154,7 +155,7 @@ var _ = Describe("PreEnqueue", func() {
 
 		p := gangs.gangs[gn].GetPosition("user-0/pod-0")
 		Expect(p).To(Equal(PodPositionReadyToSchedule))
-		Expect(status.Code()).To(Equal(framework.Unschedulable))
+		Expect(status.Code()).To(Equal(fwk.Unschedulable))
 	})
 	It("The Pod position is PodPositionUnschedulablePodPool and not all other gang Pods are PodPositionReadyToSchedule", func() {
 		gangs, fakeClient := NewGangsForTest(&mocks.MockFrameworkHandle{}, ScheduleTimeoutConfig{})
@@ -183,7 +184,7 @@ var _ = Describe("PreEnqueue", func() {
 
 		p := gangs.gangs[gn].GetPosition("user-0/pod-0")
 		Expect(p).To(Equal(PodPositionReadyToSchedule))
-		Expect(status.Code()).To(Equal(framework.Unschedulable))
+		Expect(status.Code()).To(Equal(fwk.Unschedulable))
 	})
 })
 
@@ -317,7 +318,7 @@ var _ = Describe("PreFilter", func() {
 		pod := makePod("user-0", "pod-0", v1.PodPending, fakeClient)
 		gangs.mapLock.Lock() // Lock it so that the test case will fail with timeout if PreFilter tries to do something.
 		status := gangs.PreFilter(context.Background(), nil, pod)
-		Expect(status.Code()).To(Equal(framework.Success))
+		Expect(status.Code()).To(Equal(fwk.Success))
 	}, 1)
 	It("the gang isn't registered", func() {
 		gangs, fakeClient := NewGangsForTest(&mocks.MockFrameworkHandle{}, ScheduleTimeoutConfig{})
@@ -329,7 +330,7 @@ var _ = Describe("PreFilter", func() {
 
 		status := gangs.PreFilter(context.Background(), nil, pod)
 
-		Expect(status.Code()).To(Equal(framework.UnschedulableAndUnresolvable))
+		Expect(status.Code()).To(Equal(fwk.UnschedulableAndUnresolvable))
 	})
 	It("the position for another pod in the same gang is PodPositionUnschedulablePodPool", func() {
 		gangs, fakeClient := NewGangsForTest(&mocks.MockFrameworkHandle{}, ScheduleTimeoutConfig{})
@@ -357,7 +358,7 @@ var _ = Describe("PreFilter", func() {
 
 		p := gangs.gangs[gn].GetPosition("user-0/pod-0")
 		Expect(p).To(Equal(PodPositionReadyToSchedule))
-		Expect(status.Code()).To(Equal(framework.UnschedulableAndUnresolvable))
+		Expect(status.Code()).To(Equal(fwk.UnschedulableAndUnresolvable))
 	})
 	It("the position for all other pod in the same gang is PodPositionActiveQ", func() {
 		gangs, fakeClient := NewGangsForTest(&mocks.MockFrameworkHandle{}, ScheduleTimeoutConfig{JitterSeconds: 1})
@@ -385,7 +386,7 @@ var _ = Describe("PreFilter", func() {
 
 		p := gangs.gangs[gn].GetPosition("user-0/pod-0")
 		Expect(p).To(Equal(PodPositionSchedulingCycle))
-		Expect(status.Code()).To(Equal(framework.Success))
+		Expect(status.Code()).To(Equal(fwk.Success))
 	})
 })
 
@@ -420,7 +421,7 @@ var _ = Describe("Permit", func() {
 
 		status, _ := gangs.Permit(state, makePod("user-1", "incoming", v1.PodPending, fakeClient))
 
-		Expect(status.Code()).To(Equal(framework.Success))
+		Expect(status.Code()).To(Equal(fwk.Success))
 		Expect(len(gangs.activateGangsPool)).To(Equal(0))
 		for _, uid := range []string{"user-0/pod-0", "user-0/pod-1", "user-0/pod-2"} {
 			p := gangs.gangs[gn].GetPosition(types.UID(uid))
