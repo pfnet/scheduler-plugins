@@ -18,6 +18,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/events"
 	"k8s.io/klog/v2"
+	fwk "k8s.io/kube-scheduler/framework"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
 	"k8s.io/kubernetes/pkg/scheduler/util"
 )
@@ -83,10 +84,10 @@ func NewGangs(ctx context.Context, fwkHandle framework.Handle, client kubernetes
 //   - Only one Pod event handler is called at a time
 // - A scheduler plugin entry point and a Pod event handler can be called in parallel
 
-// gangFirstPod implements framework.StateData
+// gangFirstPod implements fwk.StateData
 type gangFirstPod struct{}
 
-func (g gangFirstPod) Clone() framework.StateData {
+func (g gangFirstPod) Clone() fwk.StateData {
 	return gangFirstPod{}
 }
 
@@ -94,7 +95,7 @@ func (g gangFirstPod) Clone() framework.StateData {
 // Thus, the possible scenarios the gang pods can pass here are:
 // - All gang pods are rejected by this gang plugin, and PodsToActivate for them gets issued by the Permit.
 // - Preemption happened for a gang Pod in the past scheduling cycle, and that Pod is moved to activeQ right after it moved to the unschedulable Pod pool.
-func (gangs *Gangs) PreEnqueue(pod *corev1.Pod) *framework.Status {
+func (gangs *Gangs) PreEnqueue(pod *corev1.Pod) *fwk.Status {
 	nameSpec, ok := GangNameAndSpecOf(pod, gangs.timeoutConfig, gangs.gangAnnotationPrefix)
 	if !ok {
 		return nil
@@ -187,12 +188,12 @@ func (gangs *Gangs) PreEnqueue(pod *corev1.Pod) *framework.Status {
 			gangs.activateGangsPoolLock.Unlock()
 		}
 		gangs.fwkHandle.EventRecorder().Eventf(pod, nil, corev1.EventTypeNormal, "WaitActivation", "Scheduling", "all Pods in the gang are now ready to schedule. Waiting for activation.")
-		return framework.NewStatus(framework.Unschedulable, "This Pod will be soon activated along with other gang Pods")
+		return fwk.NewStatus(fwk.Unschedulable, "This Pod will be soon activated along with other gang Pods")
 	}
 
 	gangs.fwkHandle.EventRecorder().Eventf(pod, nil, corev1.EventTypeNormal, "WaitOtherGangsToGetReadyToSchedule", "Scheduling", fmt.Sprintf("the other pod(s) in the same gang isn't ready to schedule: %v", gang.UnreadyToSchedulePodNames()))
 
-	return framework.NewStatus(framework.Unschedulable, "the other pod(s) in the same gang isn't ready to schedule")
+	return fwk.NewStatus(fwk.Unschedulable, "the other pod(s) in the same gang isn't ready to schedule")
 }
 
 func (gangs *Gangs) PostFilter(ctx context.Context, pod *corev1.Pod) {
@@ -256,9 +257,10 @@ func (gangs *Gangs) cleanup(ctx context.Context, gang Gang) {
 			klog.V(3).Infof("position update in cleanup: %v/%s -> %s", pod.Name, position, PodPositionReadyToSchedule)
 			gangs.putPosition(gang, pod, PodPositionReadyToSchedule)
 
+			oldStatus := pod.Status.DeepCopy()
 			podStatusCopy := pod.Status.DeepCopy()
 			podStatusCopy.NominatedNodeName = ""
-			if err := util.PatchPodStatus(ctx, gangs.client, pod, podStatusCopy); err != nil {
+			if err := util.PatchPodStatus(ctx, gangs.client, pod.Name, pod.Namespace, oldStatus, podStatusCopy); err != nil {
 				klog.ErrorS(err, "failed to remove NominatedNodeName on gang Pod", "pod", klog.KObj(pod))
 				return
 			}
@@ -275,7 +277,7 @@ func (gangs *Gangs) cleanup(ctx context.Context, gang Gang) {
 	})
 }
 
-func (gangs *Gangs) PreFilter(ctx context.Context, state *framework.CycleState, pod *corev1.Pod) (status *framework.Status) {
+func (gangs *Gangs) PreFilter(ctx context.Context, state fwk.CycleState, pod *corev1.Pod) (status *fwk.Status) {
 	nameSpec, isGang := GangNameAndSpecOf(pod, gangs.timeoutConfig, gangs.gangAnnotationPrefix)
 	if !isGang {
 		return nil
@@ -305,7 +307,7 @@ func (gangs *Gangs) PreFilter(ctx context.Context, state *framework.CycleState, 
 			klog.V(3).Infof("position update in PreFilter: %v/%s -> %s", pod.Name, position, PodPositionReadyToSchedule)
 			gangs.putPosition(gang, pod, PodPositionReadyToSchedule)
 			// In this path, we don't do gangs.cleanup because we can just retry to schedule this Pod with the appropriate position.
-			return framework.NewStatus(framework.Unschedulable, "This pod isn't ready to schedule")
+			return fwk.NewStatus(fwk.Unschedulable, "This pod isn't ready to schedule")
 		}
 
 		// If any of the gang Pods are marked unschedulable,
@@ -388,7 +390,7 @@ func (gangs *Gangs) putPosition(gang Gang, pod *corev1.Pod, position PodPosition
 // activatePods activates all Pods in activateGangsPool.
 // It uses PodsToActivate feature that the scheduling framework provides,
 // which moves all Pods that we register in the cycle state from the unschedulable Pod pool to the activeQ.
-func (gangs *Gangs) activatePods(state *framework.CycleState) {
+func (gangs *Gangs) activatePods(state fwk.CycleState) {
 	// In addition to activateGangsPoolLock, we must lock gangs.mapLock during entire this process
 	// because if a new Pod is registered in gang during this process,
 	// we might miss to activate some gang Pods.
@@ -445,7 +447,7 @@ func (gangs *Gangs) activatePods(state *framework.CycleState) {
 	gangs.activateGangsPool = sets.New[GangName]()
 }
 
-func (gangs *Gangs) Permit(state *framework.CycleState, pod *corev1.Pod) (retStatus *framework.Status, _ time.Duration) {
+func (gangs *Gangs) Permit(state fwk.CycleState, pod *corev1.Pod) (retStatus *fwk.Status, _ time.Duration) {
 	defer func() {
 		if retStatus.IsSuccess() || retStatus.IsWait() {
 			// Issue PodsToActivate when Permit returns success or wait

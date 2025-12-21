@@ -13,6 +13,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/klog/v2"
+	fwk "k8s.io/kube-scheduler/framework"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
 	schedulermetrics "k8s.io/kubernetes/pkg/scheduler/metrics"
 )
@@ -96,11 +97,11 @@ func (p *Plugin) Name() string {
 // Scheduluer plugins entry points
 
 func (p *Plugin) PreFilter(
-	ctx context.Context, state *framework.CycleState, pod *corev1.Pod,
-) (*framework.PreFilterResult, *framework.Status) {
+	ctx context.Context, state fwk.CycleState, pod *corev1.Pod, _ []fwk.NodeInfo,
+) (*framework.PreFilterResult, *fwk.Status) {
 	klog.V(5).Infof("%s: PreFilter start for pod %s/%s", p.Name(), pod.Namespace, pod.Name)
 
-	var status *framework.Status
+	var status *fwk.Status
 	defer func() {
 		klog.V(5).Infof("%s: PreFilter end for pod %s/%s (status: %v)", p.Name(), pod.Namespace, pod.Name, status)
 	}()
@@ -116,30 +117,30 @@ func (p *Plugin) PreFilter(
 
 func (p *Plugin) PreFilterExtensions() framework.PreFilterExtensions { return nil }
 
-func (p *Plugin) EventsToRegister(ctx context.Context) ([]framework.ClusterEventWithHint, error) {
-	return []framework.ClusterEventWithHint{
+func (p *Plugin) EventsToRegister(_ context.Context) ([]fwk.ClusterEventWithHint, error) {
+	return []fwk.ClusterEventWithHint{
 		{
-			Event: framework.ClusterEvent{
-				Resource:   framework.Node,
-				ActionType: framework.All,
+			Event: fwk.ClusterEvent{
+				Resource:   fwk.Node,
+				ActionType: fwk.All,
 			},
 		},
 		{
-			Event: framework.ClusterEvent{
+			Event: fwk.ClusterEvent{
 				// Note: framework.Pod doesn't work expectedly for non-scheduled Pod event.
 				// We're doing the workaround in handlePodAdd.
 				// see: https://github.com/kubernetes/kubernetes/issues/110175
-				Resource:   framework.Pod,
-				ActionType: framework.All,
+				Resource:   fwk.Pod,
+				ActionType: fwk.All,
 			},
 		},
 	}, nil
 }
 
 func (p *Plugin) Permit(
-	ctx context.Context, state *framework.CycleState, pod *corev1.Pod, nodeName string,
-) (*framework.Status, time.Duration) {
-	var status *framework.Status
+	ctx context.Context, state fwk.CycleState, pod *corev1.Pod, nodeName string,
+) (*fwk.Status, time.Duration) {
+	var status *fwk.Status
 	var timeout time.Duration
 
 	klog.V(5).Infof("%s: Permit start for pod %s/%s (node=%s)", p.Name(), pod.Namespace, pod.Name, nodeName)
@@ -152,13 +153,13 @@ func (p *Plugin) Permit(
 	return status, timeout
 }
 
-func (p *Plugin) PostFilter(ctx context.Context, state *framework.CycleState, pod *corev1.Pod, m framework.NodeToStatusMap) (*framework.PostFilterResult, *framework.Status) {
+func (p *Plugin) PostFilter(ctx context.Context, _ fwk.CycleState, pod *corev1.Pod, _ framework.NodeToStatusMap) (*framework.PostFilterResult, *fwk.Status) {
 	p.gangs.PostFilter(ctx, pod)
 
-	return nil, framework.NewStatus(framework.Unschedulable)
+	return nil, fwk.NewStatus(fwk.Unschedulable)
 }
 
-func (p *Plugin) PreEnqueue(ctx context.Context, pod *corev1.Pod) *framework.Status {
+func (p *Plugin) PreEnqueue(ctx context.Context, pod *corev1.Pod) *fwk.Status {
 	if !IsGang(pod, p.config.GangAnnotationPrefix) {
 		return nil
 	}
@@ -166,12 +167,12 @@ func (p *Plugin) PreEnqueue(ctx context.Context, pod *corev1.Pod) *framework.Sta
 	return p.gangs.PreEnqueue(pod)
 }
 
-func (p *Plugin) Reserve(ctx context.Context, _ *framework.CycleState, pod *corev1.Pod, nodeName string) *framework.Status {
+func (p *Plugin) Reserve(ctx context.Context, _ fwk.CycleState, pod *corev1.Pod, nodeName string) *fwk.Status {
 	return nil
 }
 
 // Unreserve is called when a waiting gang pod is rejected due to time out, and this rejects all waiting pods in the gang
-func (p *Plugin) Unreserve(ctx context.Context, _ *framework.CycleState, pod *corev1.Pod, nodeName string) {
+func (p *Plugin) Unreserve(ctx context.Context, _ fwk.CycleState, pod *corev1.Pod, nodeName string) {
 	klog.V(5).Infof("%s: Unreserve start for pod %s/%s (node=%s)", p.Name(), pod.Namespace, pod.Name, nodeName)
 	defer func() {
 		klog.V(5).Infof("%s: Unreserve end for pod %s/%s (node=%s)", p.Name(), pod.Namespace, pod.Name, nodeName)
@@ -242,16 +243,16 @@ func (p *Plugin) handlePodDelete(obj interface{}) {
 
 // Permit plugin responses
 
-func allow(msg string) (*framework.Status, time.Duration) {
-	return framework.NewStatus(framework.Success, msg), 0
+func allow(msg string) (*fwk.Status, time.Duration) {
+	return fwk.NewStatus(fwk.Success, msg), 0
 }
 
-func reject(msg string) (*framework.Status, time.Duration) {
-	return framework.NewStatus(framework.UnschedulableAndUnresolvable, msg), 0
+func reject(msg string) (*fwk.Status, time.Duration) {
+	return fwk.NewStatus(fwk.UnschedulableAndUnresolvable, msg), 0
 }
 
-func wait(msg string, duration time.Duration) (*framework.Status, time.Duration) {
-	return framework.NewStatus(framework.Wait, msg), duration
+func wait(msg string, duration time.Duration) (*fwk.Status, time.Duration) {
+	return fwk.NewStatus(fwk.Wait, msg), duration
 }
 
 // Scheduling event messages
