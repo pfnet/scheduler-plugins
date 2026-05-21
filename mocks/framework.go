@@ -12,7 +12,6 @@ import (
 	"k8s.io/client-go/tools/events"
 	"k8s.io/klog/v2"
 	fwk "k8s.io/kube-scheduler/framework"
-	"k8s.io/kubernetes/pkg/scheduler/framework"
 	"k8s.io/kubernetes/pkg/scheduler/framework/parallelize"
 	"k8s.io/kubernetes/pkg/scheduler/util/assumecache"
 )
@@ -20,7 +19,7 @@ import (
 // Implements framework.Handle
 type MockFrameworkHandle struct {
 	clientset   clientset.Interface
-	WaitingPods map[types.UID]framework.WaitingPod
+	WaitingPods map[types.UID]fwk.WaitingPod
 }
 
 // Implements framework.WaitingPod
@@ -28,10 +27,10 @@ type MockWaitingPod struct {
 	Pod *v1.Pod
 }
 
-var _ framework.Handle = &MockFrameworkHandle{}
-var _ framework.WaitingPod = &MockWaitingPod{}
+var _ fwk.Handle = &MockFrameworkHandle{}
+var _ fwk.WaitingPod = &MockWaitingPod{}
 
-func (f *MockFrameworkHandle) SnapshotSharedLister() framework.SharedLister {
+func (f *MockFrameworkHandle) SnapshotSharedLister() fwk.SharedLister {
 	return nil
 }
 
@@ -39,13 +38,13 @@ func (f *MockFrameworkHandle) ResourceClaimCache() *assumecache.AssumeCache {
 	return nil
 }
 
-func (f *MockFrameworkHandle) IterateOverWaitingPods(callback func(framework.WaitingPod)) {
+func (f *MockFrameworkHandle) IterateOverWaitingPods(callback func(fwk.WaitingPod)) {
 	for _, wp := range f.WaitingPods {
 		callback(wp)
 	}
 }
 
-func (f *MockFrameworkHandle) GetWaitingPod(uid types.UID) framework.WaitingPod {
+func (f *MockFrameworkHandle) GetWaitingPod(uid types.UID) fwk.WaitingPod {
 	return f.WaitingPods[uid]
 }
 
@@ -58,7 +57,7 @@ func (f *MockFrameworkHandle) RejectWaitingPod(uid types.UID) bool {
 }
 
 // framework.PodNominator
-func (f *MockFrameworkHandle) AddNominatedPod(logger klog.Logger, pod fwk.PodInfo, nominatingInfo *framework.NominatingInfo) {
+func (f *MockFrameworkHandle) AddNominatedPod(logger klog.Logger, pod fwk.PodInfo, nominatingInfo *fwk.NominatingInfo) {
 }
 func (f *MockFrameworkHandle) DeleteNominatedPodIfExists(pod *v1.Pod) {}
 func (f *MockFrameworkHandle) UpdateNominatedPod(logger klog.Logger, oldPod *v1.Pod, newPodInfo fwk.PodInfo) {
@@ -69,7 +68,7 @@ func (f *MockFrameworkHandle) NominatedPodsForNode(nodeName string) []fwk.PodInf
 func (f *MockFrameworkHandle) RunPreScorePlugins(context.Context, fwk.CycleState, *v1.Pod, []fwk.NodeInfo) *fwk.Status {
 	return nil
 }
-func (f *MockFrameworkHandle) RunScorePlugins(context.Context, fwk.CycleState, *v1.Pod, []fwk.NodeInfo) ([]framework.NodePluginScores, *fwk.Status) {
+func (f *MockFrameworkHandle) RunScorePlugins(context.Context, fwk.CycleState, *v1.Pod, []fwk.NodeInfo) ([]fwk.NodePluginScores, *fwk.Status) {
 	return nil, nil
 }
 func (f *MockFrameworkHandle) RunFilterPlugins(context.Context, fwk.CycleState, *v1.Pod, fwk.NodeInfo) *fwk.Status {
@@ -95,26 +94,36 @@ func (f *MockFrameworkHandle) ClientSet() clientset.Interface {
 }
 func (f *MockFrameworkHandle) EventRecorder() events.EventRecorder                    { return &events.FakeRecorder{} }
 func (f *MockFrameworkHandle) SharedInformerFactory() informers.SharedInformerFactory { return nil }
-func (f *MockFrameworkHandle) SharedDRAManager() framework.SharedDRAManager           { return nil }
+func (f *MockFrameworkHandle) SharedDRAManager() fwk.SharedDRAManager                 { return nil }
+func (f *MockFrameworkHandle) SharedCSIManager() fwk.CSIManager                       { return nil }
 func (f *MockFrameworkHandle) RunFilterPluginsWithNominatedPods(ctx context.Context, state fwk.CycleState, pod *v1.Pod, info fwk.NodeInfo) *fwk.Status {
 	return nil
 }
-func (f *MockFrameworkHandle) Extenders() []framework.Extender { return nil }
-func (f *MockFrameworkHandle) Parallelizer() parallelize.Parallelizer {
+func (f *MockFrameworkHandle) Extenders() []fwk.Extender { return nil }
+func (f *MockFrameworkHandle) Parallelizer() fwk.Parallelizer {
 	return parallelize.NewParallelizer(1)
 }
 func (f *MockFrameworkHandle) APIDispatcher() fwk.APIDispatcher { return nil }
-func (f *MockFrameworkHandle) APICacher() framework.APICacher   { return nil }
+func (f *MockFrameworkHandle) APICacher() fwk.APICacher         { return nil }
+func (f *MockFrameworkHandle) ProfileName() string              { return "" }
 
 func (w *MockWaitingPod) GetPod() *v1.Pod             { return w.Pod }
 func (w *MockWaitingPod) GetPendingPlugins() []string { return []string{} }
 func (w *MockWaitingPod) Allow(pluginName string)     {}
 func (w *MockWaitingPod) Reject(plugin, msg string)   {}
 
-func (f *MockFrameworkHandle) AddWaitingPod(uid types.UID, wp framework.WaitingPod) {
+func (f *MockFrameworkHandle) AddWaitingPod(uid types.UID, wp fwk.WaitingPod) {
 	f.WaitingPods[uid] = wp
 }
 
 func (f *MockFrameworkHandle) RemoveWaitingPod(uid types.UID) {
 	delete(f.WaitingPods, uid)
+}
+
+func (f *MockFrameworkHandle) WorkloadManager() fwk.WorkloadManager {
+	return nil
+}
+
+func (f *MockFrameworkHandle) SignPod(ctx context.Context, pod *v1.Pod, recordPluginStats bool) fwk.PodSignature {
+	return nil
 }

@@ -508,7 +508,7 @@ var _ = Describe("PositionAnnotation", func() {
 	})
 })
 
-func NewGangsForTest(fwh framework.Handle, timeoutConfig ScheduleTimeoutConfig) (*Gangs, *fake.Clientset) {
+func NewGangsForTest(fwh fwk.Handle, timeoutConfig ScheduleTimeoutConfig) (*Gangs, *fake.Clientset) {
 	fakeClient := fake.NewSimpleClientset()
 	gangs := NewGangs(context.Background(), fwh, fakeClient, timeoutConfig, gangAnnotationPrefix)
 	return gangs, fakeClient

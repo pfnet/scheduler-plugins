@@ -14,28 +14,28 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/klog/v2"
 	fwk "k8s.io/kube-scheduler/framework"
-	"k8s.io/kubernetes/pkg/scheduler/framework"
 	schedulermetrics "k8s.io/kubernetes/pkg/scheduler/metrics"
 )
 
 var (
-	_ framework.Plugin            = &Plugin{}
-	_ framework.EnqueueExtensions = &Plugin{}
-	_ framework.PreFilterPlugin   = &Plugin{}
-	_ framework.PermitPlugin      = &Plugin{}
-	_ framework.ReservePlugin     = &Plugin{}
+	_ fwk.Plugin            = &Plugin{}
+	_ fwk.EnqueueExtensions = &Plugin{}
+	_ fwk.PreFilterPlugin   = &Plugin{}
+	_ fwk.PostFilterPlugin  = &Plugin{}
+	_ fwk.PermitPlugin      = &Plugin{}
+	_ fwk.ReservePlugin     = &Plugin{}
 )
 
 type Plugin struct {
 	// Fields fixed in constructor
 	config    PluginConfig
-	fwkHandle framework.Handle
+	fwkHandle fwk.Handle
 
 	// Fields that change at runtime
 	gangs *Gangs // Gangs has own lock
 }
 
-func NewPlugin(ctx context.Context, configuration runtime.Object, fwkHandle framework.Handle) (framework.Plugin, error) {
+func NewPlugin(ctx context.Context, configuration runtime.Object, fwkHandle fwk.Handle) (fwk.Plugin, error) {
 	registerMetrics.Do(func() {
 		schedulermetrics.RegisterMetrics(gangSchedulingEventCounter)
 	})
@@ -98,7 +98,7 @@ func (p *Plugin) Name() string {
 
 func (p *Plugin) PreFilter(
 	ctx context.Context, state fwk.CycleState, pod *corev1.Pod, _ []fwk.NodeInfo,
-) (*framework.PreFilterResult, *fwk.Status) {
+) (*fwk.PreFilterResult, *fwk.Status) {
 	klog.V(5).Infof("%s: PreFilter start for pod %s/%s", p.Name(), pod.Namespace, pod.Name)
 
 	var status *fwk.Status
@@ -115,7 +115,7 @@ func (p *Plugin) PreFilter(
 	return nil, status
 }
 
-func (p *Plugin) PreFilterExtensions() framework.PreFilterExtensions { return nil }
+func (p *Plugin) PreFilterExtensions() fwk.PreFilterExtensions { return nil }
 
 func (p *Plugin) EventsToRegister(_ context.Context) ([]fwk.ClusterEventWithHint, error) {
 	return []fwk.ClusterEventWithHint{
@@ -153,7 +153,7 @@ func (p *Plugin) Permit(
 	return status, timeout
 }
 
-func (p *Plugin) PostFilter(ctx context.Context, _ fwk.CycleState, pod *corev1.Pod, _ framework.NodeToStatusMap) (*framework.PostFilterResult, *fwk.Status) {
+func (p *Plugin) PostFilter(ctx context.Context, _ fwk.CycleState, pod *corev1.Pod, _ fwk.NodeToStatusReader) (*fwk.PostFilterResult, *fwk.Status) {
 	p.gangs.PostFilter(ctx, pod)
 
 	return nil, fwk.NewStatus(fwk.Unschedulable)
