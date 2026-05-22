@@ -9,7 +9,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/klog/v2"
 	fwk "k8s.io/kube-scheduler/framework"
-	"k8s.io/kubernetes/pkg/scheduler/framework"
 )
 
 type SchedulingGang interface {
@@ -36,7 +35,7 @@ type SchedulingGang interface {
 
 // NewSchedulingGang creates a new SchedulingGang.
 // SchedulingGang methods are thread-safe.
-func NewSchedulingGang(gang Gang, fwkHandle framework.Handle, timeout time.Duration, gangAnnotationPrefix string) SchedulingGang {
+func NewSchedulingGang(gang Gang, fwkHandle fwk.Handle, timeout time.Duration, gangAnnotationPrefix string) SchedulingGang {
 	return &schedulingGangImpl{
 		Gang:                 gang,
 		gangAnnotationPrefix: gangAnnotationPrefix,
@@ -53,7 +52,7 @@ func NewSchedulingGang(gang Gang, fwkHandle framework.Handle, timeout time.Durat
 
 type schedulingGangImpl struct {
 	Gang
-	fwkHandle            framework.Handle
+	fwkHandle            fwk.Handle
 	timeout              time.Duration
 	gangAnnotationPrefix string
 
@@ -251,7 +250,7 @@ func (g *schedulingGangImpl) allowAllAndDoneIfReady(
 	nameSpec := g.NameAndSpec()
 
 	numWaiting := 0
-	g.fwkHandle.IterateOverWaitingPods(func(wp framework.WaitingPod) {
+	g.fwkHandle.IterateOverWaitingPods(func(wp fwk.WaitingPod) {
 		if g.contains(wp.GetPod()) {
 			numWaiting += 1
 		}
@@ -298,7 +297,7 @@ func (g *schedulingGangImpl) allowAllAndDone(
 	g.setDone(completionStatus)
 
 	// Allow waiting Pods
-	g.fwkHandle.IterateOverWaitingPods(func(wp framework.WaitingPod) {
+	g.fwkHandle.IterateOverWaitingPods(func(wp fwk.WaitingPod) {
 		pod := wp.GetPod()
 		if g.contains(pod) {
 			msg := msgF(pod)
@@ -317,7 +316,7 @@ func (g *schedulingGangImpl) allowAllAndDone(
 }
 
 func (g *schedulingGangImpl) RejectWaitingPods(completionStatus GangSchedulingEvent, msgF msgForPodFunc) {
-	g.fwkHandle.IterateOverWaitingPods(func(wp framework.WaitingPod) {
+	g.fwkHandle.IterateOverWaitingPods(func(wp fwk.WaitingPod) {
 		pod := wp.GetPod()
 		if g.contains(pod) {
 			msg := msgF(pod)

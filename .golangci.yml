@@ -1,2 +1,1 @@
-run:
-  timeout: 15m
+version: "2"
